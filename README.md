@@ -161,3 +161,7 @@ switchboard --help
 
 Relay REPL commands: `approve`/`reject`/`list`, `agents`, `channels`, `members <chan>`, `addto <agent> <chan>...`, `removefrom <agent> <chan>...`, `manual`/`auto`/`llm`, `status`, `help`, `quit`.
 
+## License
+
+MIT — see [LICENSE](LICENSE).
+
