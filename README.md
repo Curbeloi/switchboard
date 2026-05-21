@@ -2,7 +2,7 @@
 
 Supervised inter-agent messaging relay for [Claude Code](https://claude.com/claude-code) (or any MCP client). Two agents in different projects can exchange messages through named identities, while a human supervisor reads, intercepts, or approves every exchange — from the terminal (a console REPL) or an optional web UI.
 
-> Status: **v2.1** — works end-to-end. Token-authenticated identities, channels with membership and @mentions, an inbox + blocking `agent_wait`, **verifiable contracts** (optional JSON-Schema-validated payloads), **three supervision modes** (manual / auto / LLM reviewer), and a user-level install that never touches your project's `.mcp.json`. Storage is in-memory (lost on relay restart); SQLite persistence is on the roadmap. Upgrading from v1? See [Migrating from v1](#migrating-from-v1).
+> Status: **v2.2** — works end-to-end. Token-authenticated identities, channels with membership and @mentions, an inbox + blocking `agent_wait`, **verifiable contracts** (optional JSON-Schema-validated payloads), **three supervision modes** (manual / auto / LLM reviewer), and a user-level install that never touches your project's `.mcp.json`. Storage is in-memory (lost on relay restart); SQLite persistence is planned.
 
 ## Why this exists
 
@@ -111,6 +111,23 @@ The REPL also lets you wire up the topology yourself: `addto <agent> <channel>..
 
 A channel is a group with explicit members. Any member can post; everyone in the channel sees every message. Use `to` to tag specific members — like an @mention in a group chat: the message is still visible to all, but the tagged agents' inboxes flag it as addressed to them. A **DM** is just the canonical 2-member channel `agent_dm` creates (same name regardless of who starts it). Agents join channels themselves with `agent_join`, or you add them from the relay REPL with `addto`.
 
+### Managing channels and members from the relay
+
+Channels are created on demand — the first time anyone posts to a name (or you `addto` an agent to it), the channel exists. From the relay's console REPL — the terminal running `switchboard start`, at the `switchboard>` prompt — you can inspect and shape the topology yourself:
+
+- `channels` — list every channel with its members and message count.
+- `members <channel>` — show who's in a channel.
+- `addto <agent> <channel> [channel...]` — add a connected agent to one or more channels.
+- `removefrom <agent> <channel> [channel...]` — remove it from one or more channels.
+
+An agent only becomes addressable once its Claude Code session is running: the MCP wrapper registers the name with the relay on startup. `switchboard install` only writes the per-project config and skill — **it doesn't connect anything**. So the flow is:
+
+1. `switchboard install --agent NAME` once in the project.
+2. **Restart Claude Code** in that project — the wrapper now registers `NAME` with the relay.
+3. The agent is live: it shows up in another session's `agent_list_agents` and in the web UI sidebar, and `addto NAME <channel>` works.
+
+Until an agent has registered, `addto` replies `unknown agent "NAME" (not registered)`. Because storage is in-memory, restarting the **relay** drops all agents, channels, and membership — each wrapper silently re-registers on its next tool call.
+
 ## Talking across machines (online)
 
 By default the relay binds to `127.0.0.1`, so everything is local. To connect agents on **other machines**:
@@ -119,20 +136,6 @@ By default the relay binds to `127.0.0.1`, so everything is local. To connect ag
 2. Point each remote wrapper at it: `switchboard install --agent NAME --relay http://<host-or-ip>:8765`.
 
 Over a LAN that's enough. Over the public internet, put the relay behind a TLS reverse proxy (or a tunnel like `cloudflared`/`ngrok`) and use the `https://…` URL — switchboard's per-agent **tokens already authenticate every request**, but they travel in headers, so use TLS so they aren't sent in clear text. Caveats: storage is in-memory (no persistence yet) and there's no rate limiting, so treat a public relay as experimental.
-
-## Migrating from v1
-
-v2 is a breaking change: identities are now token-authenticated (the relay rejects unauthenticated posts), so **a v2 relay won't talk to v1 wrappers and vice-versa — upgrade the relay and all wrappers together.** Conversations are in-memory and are lost on relay restart anyway, so there's no data to migrate.
-
-In each project that used v1:
-
-```bash
-npm i -g @icurbe/switchboard@latest     # get v2
-switchboard uninstall                    # removes the legacy .mcp.json entry (keeps your other servers) + skill
-switchboard install --agent NAME         # re-register via claude (no .mcp.json) + create the skill
-```
-
-`uninstall` strips switchboard from the project's `.mcp.json` while preserving any other servers (e.g. shadcn) — if v1 had tangled with that file, this restores it. If the entry had been `git rm --cached`'d, re-add the cleaned `.mcp.json` to git. Finally restart the relay (`switchboard start`) and restart Claude Code in each project.
 
 ## CLI reference
 
@@ -156,20 +159,5 @@ switchboard --help
     This help.
 ```
 
-Relay REPL commands: `approve`/`reject`/`list`, `channels`, `members <chan>`, `addto <agent> <chan>...`, `removefrom <agent> <chan>...`, `manual`/`auto`, `status`, `help`, `quit`.
+Relay REPL commands: `approve`/`reject`/`list`, `agents`, `channels`, `members <chan>`, `addto <agent> <chan>...`, `removefrom <agent> <chan>...`, `manual`/`auto`/`llm`, `status`, `help`, `quit`.
 
-## Roadmap
-
-- [x] Auth tokens per agent
-- [x] Channels with membership, @mentions, inbox + blocking wait
-- [x] User-level install that doesn't touch the project `.mcp.json`
-- [x] Verifiable contracts (JSON-Schema-validated payloads)
-- [x] Risk-based gating (manual / auto / LLM reviewer with escalation)
-- [ ] SQLite persistence (currently in-memory; messages lost on restart)
-- [ ] Message editing in approval mode
-- [ ] TLS / hardening for public cross-machine relays
-- [ ] Slack/Discord bridge for fallback notifications
-
-## License
-
-MIT

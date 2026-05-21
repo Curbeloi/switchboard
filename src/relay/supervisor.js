@@ -4,6 +4,7 @@ const HELP = `commands:
   approve <id>     deliver a pending message (id can be a prefix; 'all' approves every pending)
   reject  <id>     drop a pending message
   list             show pending messages
+  agents           list connected agents
   channels         list channels with members and message counts
   members <chan>   show the members of a channel
   addto <agent> <chan> [chan...]      add an agent to one or more channels
@@ -154,6 +155,21 @@ export function startConsoleSupervisor({ store, broadcast, reviewer = null }) {
         }
         const msg = rejectOne(matches[0].id);
         process.stdout.write(`rejected ${msg.id.slice(0, 8)} (${msg.from} → ${msg.channel})\n`);
+        return;
+      }
+
+      case "agents":
+      case "who": {
+        const list = store.listAgents();
+        if (list.length === 0) {
+          process.stdout.write("no agents connected\n");
+          return;
+        }
+        for (const a of list) {
+          process.stdout.write(
+            `  ${a.name}  (registered ${new Date(a.registeredAt).toLocaleTimeString()})\n`
+          );
+        }
         return;
       }
 
