@@ -8,9 +8,10 @@ const HELP = `commands:
   members <chan>   show the members of a channel
   addto <agent> <chan> [chan...]      add an agent to one or more channels
   removefrom <agent> <chan> [chan...] remove an agent from one or more channels
-  manual           turn approval mode on  (the default — every message waits)
-  auto             turn approval mode off (deliver everything, no supervision)
-  status           show current mode and pending count
+  manual           supervision mode: every message waits for your approval (default)
+  auto             supervision mode: deliver everything, no supervision
+  llm              supervision mode: an LLM reviewer approves/rejects/escalates (needs a reviewer)
+  status           show current mode, reviewer, and pending count
   help             show this help
   quit             stop the relay
 `;
@@ -25,7 +26,7 @@ function preview(text, n) {
  * or rejecting queued messages without opening the web UI. Skips itself if
  * stdin is not a TTY (e.g. when the relay is run under systemd / nohup).
  */
-export function startConsoleSupervisor({ store, broadcast }) {
+export function startConsoleSupervisor({ store, broadcast, reviewer = null }) {
   if (!process.stdin.isTTY) return null;
 
   const rl = readline.createInterface({
@@ -51,8 +52,15 @@ export function startConsoleSupervisor({ store, broadcast }) {
       );
       return;
     }
+    if (event.type === "message.escalated") {
+      const m = event.message;
+      notify(
+        `[ESCALATED ${m.id.slice(0, 8)}] ${m.from} → ${m.channel} — reviewer: ${m.review?.reason ?? "needs a human"}\n  approve/reject it`
+      );
+      return;
+    }
     if (event.type === "approval.mode") {
-      notify(`approval mode → ${event.mode ? "manual" : "auto"}`);
+      notify(`mode → ${event.mode}`);
       return;
     }
   }
@@ -210,19 +218,28 @@ export function startConsoleSupervisor({ store, broadcast }) {
       }
 
       case "auto":
-        store.setApprovalMode(false);
-        broadcast({ type: "approval.mode", mode: false });
+      case "manual": {
+        const m = store.setMode(cmd);
+        broadcast({ type: "approval.mode", mode: m });
         return;
+      }
 
-      case "manual":
-        store.setApprovalMode(true);
-        broadcast({ type: "approval.mode", mode: true });
+      case "llm": {
+        if (!reviewer?.available) {
+          process.stdout.write(
+            "llm mode unavailable: no reviewer (set ANTHROPIC_API_KEY or install the claude CLI, then restart)\n"
+          );
+          return;
+        }
+        const m = store.setMode("llm");
+        broadcast({ type: "approval.mode", mode: m });
         return;
+      }
 
       case "status": {
-        const mode = store.getApprovalMode() ? "manual" : "auto";
         const pending = store.listPending().length;
-        process.stdout.write(`mode: ${mode}, pending: ${pending}\n`);
+        const rev = reviewer?.available ? `reviewer: ${reviewer.backend}` : "reviewer: none";
+        process.stdout.write(`mode: ${store.getMode()}, ${rev}, pending: ${pending}\n`);
         return;
       }
 
@@ -249,8 +266,10 @@ export function startConsoleSupervisor({ store, broadcast }) {
 
   rl.on("close", () => process.exit(0));
 
-  const mode = store.getApprovalMode() ? "manual" : "auto";
-  process.stdout.write(`supervisor active (mode: ${mode}). Type 'help' for commands.\n`);
+  const rev = reviewer?.available ? ` reviewer: ${reviewer.backend}.` : "";
+  process.stdout.write(
+    `supervisor active (mode: ${store.getMode()}).${rev} Type 'help' for commands.\n`
+  );
   rl.prompt();
 
   return { onEvent };

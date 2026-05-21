@@ -177,7 +177,7 @@ export async function doctor({ relay = DEFAULT_RELAY, cwd = process.cwd() } = {}
     if (res.ok) {
       const body = await res.json();
       process.stdout.write(
-        `[ok]   relay at ${relay} reachable (approval mode: ${body.approvalMode ? "on" : "off"})\n`
+        `[ok]   relay at ${relay} reachable (mode: ${body.mode}${body.reviewer?.available ? `, reviewer: ${body.reviewer.backend ?? "on"}` : ""})\n`
       );
     } else {
       ok = false;

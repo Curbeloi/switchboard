@@ -59,6 +59,14 @@ const TOOLS = [
           items: { type: "string" },
           description: "Optional: agent name(s) this message is addressed to within the channel (an @mention). They must be registered agents and are auto-joined to the channel.",
         },
+        data: {
+          type: "object",
+          description: "Optional: a structured payload (a verifiable contract) alongside the prose, e.g. the exact shape/fields you're announcing. The receiver gets machine-checkable data, not just text.",
+        },
+        schema: {
+          type: "object",
+          description: "Optional: a JSON Schema that `data` must satisfy. The relay validates `data` against it on send and rejects the message if it doesn't conform — so the contract is verified, not just asserted.",
+        },
       },
       required: ["channel", "content"],
     },
@@ -217,13 +225,14 @@ export async function runMcp({ agent, relayUrl }) {
       .map((m) => {
         const tag = Array.isArray(m.to) && m.to.length ? ` @${m.to.join(" @")}` : "";
         const mine = Array.isArray(m.to) && m.to.includes(agent) ? " (for you)" : "";
-        return `[${new Date(m.createdAt).toISOString()}] ${m.from}${tag}${mine}: ${m.content}`;
+        const data = m.data != null ? `\n  data: ${JSON.stringify(m.data)}` : "";
+        return `[${new Date(m.createdAt).toISOString()}] ${m.from}${tag}${mine}: ${m.content}${data}`;
       })
       .join("\n");
   }
 
   const server = new Server(
-    { name: "@icurbe/switchboard", version: "2.0.0" },
+    { name: "@icurbe/switchboard", version: "2.1.0" },
     { capabilities: { tools: {} } }
   );
 
@@ -234,12 +243,15 @@ export async function runMcp({ agent, relayUrl }) {
     try {
       switch (name) {
         case "agent_send": {
-          const { channel, content, to } = args;
+          const { channel, content, to, data, schema } = args;
           const toList = Array.isArray(to) ? to : to ? [to] : [];
-          const msg = await call(() => client.postMessage({ channel, content, to: toList }));
+          const msg = await call(() =>
+            client.postMessage({ channel, content, to: toList, data, schema })
+          );
           const tag = toList.length ? ` (to: ${toList.join(", ")})` : "";
+          const contract = schema ? " [contract validated]" : "";
           return reply(
-            `posted message ${msg.id} to channel "${channel}" as "${agent}"${tag} (status: ${msg.status})`
+            `posted message ${msg.id} to channel "${channel}" as "${agent}"${tag}${contract} (status: ${msg.status})`
           );
         }
         case "agent_dm": {

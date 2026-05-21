@@ -36,14 +36,23 @@ header h1 {
 }
 .controls { display: flex; align-items: center; gap: 16px; }
 
-.toggle {
+.mode-control {
   display: flex;
   align-items: center;
   gap: 6px;
-  cursor: pointer;
   user-select: none;
+  font-size: 13px;
+  color: var(--muted);
 }
-.toggle input { transform: scale(1.1); accent-color: var(--accent); }
+.mode-control select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 8px;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 
 .status {
   font-size: 12px;
@@ -154,6 +163,22 @@ aside li {
 
 .message.pending { border-left: 3px solid var(--warn); }
 .message.rejected { opacity: 0.5; text-decoration: line-through; }
+.message .contract {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  overflow-x: auto;
+}
+.message .review {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--warn);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 
 .actions { display: flex; gap: 6px; grid-column: 1 / -1; }
 .actions button {

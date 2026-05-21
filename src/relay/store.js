@@ -23,11 +23,13 @@ export function createStore() {
   /** @type {Set<{agent: string, channel: string|null, resolve: Function, timer: any}>} */
   const waiters = new Set();
 
-  /** Approval mode toggle (global; per-channel could be a future improvement).
-   *  Default ON: every message is held until a human approves it via the
-   *  console supervisor or the web UI. Pass --auto to the CLI to start with
-   *  it off. */
-  let approvalMode = true;
+  /** Supervision mode (global): how posted messages are gated.
+   *   - "manual": every message is held pending until a human approves it.
+   *   - "auto":   every message is delivered immediately (no supervision).
+   *   - "llm":    held pending, then an LLM reviewer approves/rejects/escalates;
+   *               escalations stay pending for the human.
+   *  Default "manual" (supervision-first). manual/auto never invoke the LLM. */
+  let mode = "manual";
 
   function getChannel(name, create = true) {
     if (!channels.has(name) && create) {
@@ -158,7 +160,7 @@ export function createStore() {
     },
 
     /* messages */
-    postMessage({ channel, from, content, to = [] }) {
+    postMessage({ channel, from, content, to = [], data = null, schema = null }) {
       const ch = getChannel(channel);
       ch.members.add(from); // sender is implicitly a member
       for (const m of to) ch.members.add(m); // tagged agents join the channel
@@ -168,8 +170,10 @@ export function createStore() {
         from,
         content,
         to,
+        data,
+        schema,
         createdAt: Date.now(),
-        status: approvalMode ? "pending" : "delivered",
+        status: mode === "auto" ? "delivered" : "pending",
       };
       if (msg.status === "pending") {
         pending.set(msg.id, msg);
@@ -187,22 +191,31 @@ export function createStore() {
     listPending() {
       return [...pending.values()];
     },
-    approvePending(id) {
+    approvePending(id, review = null) {
       const msg = pending.get(id);
       if (!msg) return null;
       msg.status = "delivered";
       msg.approvedAt = Date.now();
+      if (review) msg.review = review;
       pending.delete(id);
       getChannel(msg.channel).messages.push(msg);
       notifyWaiters(msg);
       return msg;
     },
-    rejectPending(id) {
+    rejectPending(id, review = null) {
       const msg = pending.get(id);
       if (!msg) return null;
       msg.status = "rejected";
       msg.rejectedAt = Date.now();
+      if (review) msg.review = review;
       pending.delete(id);
+      return msg;
+    },
+    /** Reviewer escalated to a human: annotate but leave it pending. */
+    markEscalated(id, reason) {
+      const msg = pending.get(id);
+      if (!msg) return null;
+      msg.review = { decision: "escalate", reason, at: Date.now() };
       return msg;
     },
 
@@ -231,13 +244,16 @@ export function createStore() {
       });
     },
 
-    /* approval-mode toggle */
-    setApprovalMode(value) {
-      approvalMode = Boolean(value);
-      return approvalMode;
+    /* supervision mode */
+    setMode(value) {
+      if (!["manual", "auto", "llm"].includes(value)) {
+        throw new Error(`invalid mode: ${value} (expected manual | auto | llm)`);
+      }
+      mode = value;
+      return mode;
     },
-    getApprovalMode() {
-      return approvalMode;
+    getMode() {
+      return mode;
     },
   };
 }
@@ -257,8 +273,11 @@ export function createStore() {
  * @property {string} from
  * @property {string} content
  * @property {string[]} to
+ * @property {object|null} data
+ * @property {object|null} schema
  * @property {number} createdAt
  * @property {"delivered" | "pending" | "rejected"} status
+ * @property {{decision: string, reason: string, at: number}} [review]
  * @property {number} [approvedAt]
  * @property {number} [rejectedAt]
  */

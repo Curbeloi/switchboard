@@ -1,4 +1,7 @@
 import { Router } from "express";
+import Ajv from "ajv";
+
+const ajv = new Ajv({ allErrors: true, strict: false });
 
 const publicAgent = (a) => ({
   name: a.name,
@@ -6,12 +9,15 @@ const publicAgent = (a) => ({
   lastSeenAt: a.lastSeenAt,
 });
 
-export function mountRoutes(app, { store, broadcast }) {
+export function mountRoutes(app, { store, broadcast, reviewer = null }) {
   const api = Router();
+  const reviewerAvailable = Boolean(reviewer?.available);
 
   /** Resolve the calling agent from its token. Sends 401 and returns null
    *  when missing/invalid. Token may arrive as `Authorization: Bearer <t>`
    *  or `x-switchboard-token: <t>`. */
+  const reviewerInfo = { available: reviewerAvailable, backend: reviewer?.backend ?? null };
+
   function requireAgent(req, res) {
     const auth = req.get("authorization");
     const token =
@@ -37,7 +43,7 @@ export function mountRoutes(app, { store, broadcast }) {
 
   /* Health */
   api.get("/health", (_req, res) => {
-    res.json({ ok: true, approvalMode: store.getApprovalMode() });
+    res.json({ ok: true, mode: store.getMode(), reviewer: reviewerInfo });
   });
 
   /* Agents */
@@ -117,7 +123,35 @@ export function mountRoutes(app, { store, broadcast }) {
     if (unknown.length) {
       return res.status(400).json({ error: `unknown agent(s) in 'to': ${unknown.join(", ")}` });
     }
-    const msg = store.postMessage({ channel: req.params.channel, from: agent.name, content, to });
+    // Verifiable contract (opt-in): if a JSON Schema is supplied, `data` must
+    // satisfy it. A malformed contract is rejected here, before it can queue.
+    const data = req.body?.data ?? null;
+    const schema = req.body?.schema ?? null;
+    if (schema != null) {
+      if (typeof schema !== "object") {
+        return res.status(400).json({ error: "schema must be a JSON Schema object" });
+      }
+      let validate;
+      try {
+        validate = ajv.compile(schema);
+      } catch (e) {
+        return res.status(400).json({ error: `invalid schema: ${e.message}` });
+      }
+      if (!validate(data)) {
+        return res.status(400).json({
+          error: "contract validation failed",
+          details: validate.errors,
+        });
+      }
+    }
+    const msg = store.postMessage({
+      channel: req.params.channel,
+      from: agent.name,
+      content,
+      to,
+      data,
+      schema,
+    });
     broadcast({
       type: msg.status === "pending" ? "message.pending" : "message.delivered",
       message: msg,
@@ -163,16 +197,25 @@ export function mountRoutes(app, { store, broadcast }) {
     res.json(messages);
   });
 
-  /* Approval mode (human supervision surfaces — no agent token required) */
+  /* Supervision mode + approval queue (human surfaces — no agent token required) */
   api.get("/approval", (_req, res) => {
     res.json({
-      mode: store.getApprovalMode(),
+      mode: store.getMode(),
+      reviewer: reviewerInfo,
       pending: store.listPending(),
     });
   });
   api.post("/approval/mode", (req, res) => {
-    const enabled = Boolean(req.body?.enabled);
-    const mode = store.setApprovalMode(enabled);
+    const next = req.body?.mode;
+    if (!["manual", "auto", "llm"].includes(next)) {
+      return res.status(400).json({ error: "mode must be manual | auto | llm" });
+    }
+    if (next === "llm" && !reviewerAvailable) {
+      return res.status(409).json({
+        error: "llm mode unavailable: no reviewer (set ANTHROPIC_API_KEY and restart the relay)",
+      });
+    }
+    const mode = store.setMode(next);
     broadcast({ type: "approval.mode", mode });
     res.json({ mode });
   });

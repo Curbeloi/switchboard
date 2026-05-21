@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
+import { readFileSync } from "node:fs";
 import { startRelay } from "../src/relay/server.js";
 import { startConsoleSupervisor } from "../src/relay/supervisor.js";
 import { runMcp } from "../src/mcp/server.js";
@@ -8,11 +9,15 @@ import { installMcp, uninstallMcp, doctor } from "../src/install.js";
 const HELP = `switchboard — supervised inter-agent messaging relay
 
 Usage:
-  switchboard start [--port N] [--host HOST] [--auto]
+  switchboard start [--port N] [--host HOST] [--auto] [--review-policy FILE] [--review-model ID]
       Start the relay server with HTTP API, WebSocket stream, supervision UI,
       and a console supervisor REPL on the same terminal (when stdin is a TTY).
-      Defaults: --port 8765, --host 127.0.0.1. Approval mode is ON by default;
-      pass --auto to start without supervision (deliver everything).
+      Defaults: --port 8765, --host 127.0.0.1. Supervision mode is 'manual' by
+      default (every message waits for approval); pass --auto to deliver without
+      supervision. The 'llm' mode (set in the REPL/UI) uses an LLM reviewer —
+      available when ANTHROPIC_API_KEY is set or the claude CLI is installed.
+      --review-policy points at a markdown rubric for the reviewer; --review-model
+      overrides the model (default claude-haiku-4-5).
 
   switchboard mcp --agent NAME [--relay URL]
       Run as an MCP stdio server. Registers as agent NAME against the relay.
@@ -56,17 +61,29 @@ try {
         port: { type: "string", default: "8765" },
         host: { type: "string", default: "127.0.0.1" },
         auto: { type: "boolean", default: false },
+        "review-policy": { type: "string" },
+        "review-model": { type: "string" },
       },
       strict: true,
     });
-    const relay = await startRelay({ port: Number(values.port), host: values.host });
+    let reviewPolicy;
+    if (values["review-policy"]) {
+      reviewPolicy = readFileSync(values["review-policy"], "utf8");
+    }
+    const relay = await startRelay({
+      port: Number(values.port),
+      host: values.host,
+      reviewPolicy,
+      reviewModel: values["review-model"],
+    });
     if (values.auto) {
-      relay.store.setApprovalMode(false);
-      relay.broadcast({ type: "approval.mode", mode: false });
+      relay.store.setMode("auto");
+      relay.broadcast({ type: "approval.mode", mode: "auto" });
     }
     const supervisor = startConsoleSupervisor({
       store: relay.store,
       broadcast: relay.broadcast,
+      reviewer: relay.reviewer,
     });
     if (supervisor) relay.subscribe(supervisor.onEvent);
   } else if (subcommand === "mcp") {

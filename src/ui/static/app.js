@@ -1,6 +1,7 @@
 (() => {
   const statusEl = document.getElementById("status");
-  const approvalToggle = document.getElementById("approval-mode");
+  const modeSelect = document.getElementById("mode-select");
+  const modeLlmOption = document.getElementById("mode-llm");
   const agentsList = document.getElementById("agents");
   const channelsList = document.getElementById("channels");
   const messagesList = document.getElementById("messages");
@@ -71,11 +72,19 @@
     const to = Array.isArray(m.to) && m.to.length
       ? `<span class="to">→ @${m.to.map(escapeHtml).join(" @")}</span>`
       : "";
+    const data = m.data != null
+      ? `<pre class="contract">${escapeHtml(JSON.stringify(m.data, null, 2))}</pre>`
+      : "";
+    const review = m.review
+      ? `<div class="review">reviewer: ${escapeHtml(m.review.decision)} — ${escapeHtml(m.review.reason || "")}</div>`
+      : "";
     li.innerHTML = `
       <span class="from">${escapeHtml(m.from)}</span>
       ${to}
       <span class="time">${fmtTime(m.createdAt)}</span>
       <div class="content">${escapeHtml(m.content)}</div>
+      ${data}
+      ${review}
     `;
     if (withActions && m.status === "pending") {
       const actions = document.createElement("div");
@@ -190,10 +199,15 @@
     ws.onmessage = (event) => handle(JSON.parse(event.data));
   }
 
+  function setReviewerAvailable(available) {
+    if (modeLlmOption) modeLlmOption.disabled = !available;
+  }
+
   function handle(e) {
     switch (e.type) {
       case "hello":
-        approvalToggle.checked = Boolean(e.approvalMode);
+        if (e.mode) modeSelect.value = e.mode;
+        setReviewerAvailable(Boolean(e.reviewer?.available));
         bootstrap();
         break;
       case "agent.registered":
@@ -223,6 +237,11 @@
         renderChannels();
         if (e.message.channel === selected) renderFeed();
         break;
+      case "message.escalated":
+        // Reviewer kicked it to a human — keep it pending, annotate with the reason.
+        pending.set(e.message.id, e.message);
+        if (e.message.channel === selected) renderFeed();
+        break;
       case "message.rejected":
         pending.delete(e.message.id);
         if (e.message.channel === selected) renderFeed();
@@ -234,7 +253,7 @@
         break;
       }
       case "approval.mode":
-        approvalToggle.checked = Boolean(e.mode);
+        if (e.mode) modeSelect.value = e.mode;
         break;
     }
   }
@@ -248,17 +267,26 @@
     for (const a of agentsRes) agents.set(a.name, a);
     for (const c of channelsRes) channels.set(c.name, { members: c.members || [], messageCount: c.messageCount });
     for (const m of approvalRes.pending) pending.set(m.id, m);
+    if (approvalRes.mode) modeSelect.value = approvalRes.mode;
+    setReviewerAvailable(Boolean(approvalRes.reviewer?.available));
     renderAgents();
     renderChannels();
     if (selected) renderFeed();
   }
 
-  approvalToggle.addEventListener("change", async () => {
-    await fetch("/api/approval/mode", {
+  modeSelect.addEventListener("change", async () => {
+    const res = await fetch("/api/approval/mode", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ enabled: approvalToggle.checked }),
+      body: JSON.stringify({ mode: modeSelect.value }),
     });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      alert(body.error || "could not change mode");
+      // refresh from server truth
+      const approval = await fetch("/api/approval").then((r) => r.json());
+      modeSelect.value = approval.mode;
+    }
   });
 
   setStatus("connecting", "connecting…");

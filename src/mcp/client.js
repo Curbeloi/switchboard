@@ -38,10 +38,14 @@ export function createRelayClient(relayUrl, token = null) {
     leaveChannel(channel) {
       return request(`/api/channels/${encodeURIComponent(channel)}/leave`, { method: "POST" });
     },
-    postMessage({ channel, content, to }) {
+    postMessage({ channel, content, to, data, schema }) {
+      const body = { content };
+      if (to && to.length) body.to = to;
+      if (data != null) body.data = data;
+      if (schema != null) body.schema = schema;
       return request(`/api/channels/${encodeURIComponent(channel)}/messages`, {
         method: "POST",
-        body: JSON.stringify(to && to.length ? { content, to } : { content }),
+        body: JSON.stringify(body),
       });
     },
     dm({ to, content }) {

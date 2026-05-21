@@ -10,9 +10,13 @@
     <header>
       <h1>switchboard</h1>
       <div class="controls">
-        <label class="toggle">
-          <input type="checkbox" id="approval-mode" />
-          <span>Approval mode</span>
+        <label class="mode-control">
+          <span>Mode</span>
+          <select id="mode-select">
+            <option value="manual">manual</option>
+            <option value="auto">auto</option>
+            <option value="llm" id="mode-llm">llm</option>
+          </select>
         </label>
         <span id="status" class="status status-connecting">connecting…</span>
       </div>

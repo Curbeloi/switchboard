@@ -29,7 +29,7 @@ Two halves of a single package, separated by a network boundary:
 
 - **Install/skill** (`src/install.js`) — `installMcp` shells out to the `claude` CLI (`claude mcp add --scope local`) so it never writes the project's `.mcp.json`; `ensureSkill` writes `.claude/skills/switchboard/SKILL.md` (idempotent). `uninstallMcp` removes the registration, cleans any legacy `.mcp.json` entry, and removes the skill. `doctor` checks relay + registration + skill.
 
-- **Supervision UI** (`src/ui/static/`) — vanilla HTML/CSS/JS, no build. `app.js` opens one WebSocket to `/subscribe`, bootstraps via REST GETs, and shows a per-channel conversation view (click a channel → only its messages). Reacts to `agent.registered`, `channel.updated`, `message.delivered|pending|rejected`, `message.read`, `approval.mode`.
+- **Supervision UI** (`src/ui/static/`) — vanilla HTML/CSS/JS, no build. `app.js` opens one WebSocket to `/subscribe`, bootstraps via REST GETs, and shows a per-channel conversation view (click a channel → only its messages). Reacts to `agent.registered`, `channel.updated`, `message.delivered|pending|escalated|rejected`, `message.read`, `approval.mode`. The mode control is a 3-way select (`llm` disabled when no reviewer); pending items render the reviewer's decision/reason and any structured `data`.
 
 `bin/switchboard.js` is a thin `parseArgs` dispatcher: `start` / `mcp` / `install` / `uninstall` / `doctor`.
 
@@ -44,7 +44,11 @@ agent_send(channel, content, to?)  [MCP tool, token attached]
           → on delivered: store.notifyWaiters() resolves any agent_wait long-polls
 ```
 
-Approval mode is a global boolean, **on by default** (supervision-first; opt out with `switchboard start --auto` or the REPL/UI toggle). When on, a posted message is `pending` (held out of the channel) until approved via `/api/approval/:id/approve`, the REPL `approve`, or the UI; only then does it enter the channel, count toward inboxes, and wake waiters.
+Supervision is a global **mode** (`store.getMode()`/`setMode()`): `manual` (default — every message held `pending` until a human approves), `auto` (deliver immediately), or `llm` (held `pending`, then an LLM reviewer drains the queue). `manual` and `auto` never call an LLM (zero tokens). A posted message is `pending` in manual/llm and `delivered` in auto; only on approval does it enter the channel, count toward inboxes, and wake waiters.
+
+`llm` mode: `src/relay/reviewer.js` (`createReviewer`) judges each pending message against a rubric and returns `approve` / `reject` / `escalate`. server.js wires it via `subscribe()` on `message.pending` (only when `mode === "llm"`): approve→`approvePending`, reject→`rejectPending`, escalate→`markEscalated` (stays pending for a human, broadcasts `message.escalated`). **Fail safe: any reviewer error escalates — never auto-approves.** Two backends, picked at startup: the Anthropic API (Haiku + cached rubric) when `ANTHROPIC_API_KEY` is set, else `claude -p` headless when the `claude` CLI exists; otherwise the reviewer is unavailable and `llm` mode is rejected (409). The rubric treats the message as untrusted data (prompt-injection surface).
+
+Verifiable contracts: `agent_send` accepts optional `data` + `schema` (JSON Schema). `routes/index.js` validates `data` against `schema` with `ajv` on post and returns 400 if it fails — a malformed contract never queues. The reviewer receives the (validated) structured data.
 
 ### Identity, channels, inbox, wake
 

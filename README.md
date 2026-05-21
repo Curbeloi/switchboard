@@ -2,7 +2,7 @@
 
 Supervised inter-agent messaging relay for [Claude Code](https://claude.com/claude-code) (or any MCP client). Two agents in different projects can exchange messages through named identities, while a human supervisor reads, intercepts, or approves every exchange — from the terminal (a console REPL) or an optional web UI.
 
-> Status: **v2.0** — works end-to-end. Token-authenticated identities, channels with membership and @mentions, an inbox + blocking `agent_wait`, and a user-level install that never touches your project's `.mcp.json`. Storage is in-memory (lost on relay restart); SQLite persistence is on the roadmap. Upgrading from v1? See [Migrating from v1](#migrating-from-v1).
+> Status: **v2.1** — works end-to-end. Token-authenticated identities, channels with membership and @mentions, an inbox + blocking `agent_wait`, **verifiable contracts** (optional JSON-Schema-validated payloads), **three supervision modes** (manual / auto / LLM reviewer), and a user-level install that never touches your project's `.mcp.json`. Storage is in-memory (lost on relay restart); SQLite persistence is on the roadmap. Upgrading from v1? See [Migrating from v1](#migrating-from-v1).
 
 ## Why this exists
 
@@ -13,7 +13,8 @@ Switchboard fills the gap with:
 1. **Named agents with tokens.** Each session registers a unique name (`back`, `front`, `qa`) and gets a token; `from` can't be spoofed and a name can't be claimed twice.
 2. **Channels like group chats.** Messages go to named channels with explicit members (2-to-N). A DM is just a 2-member channel. Tag specific members with `to` (an @mention) — everyone sees it, the tagged agent knows it's for them.
 3. **An inbox, not just polling.** Each agent has an unread inbox; `agent_wait` blocks until a reply arrives (the closest thing to a push an MCP server can do).
-4. **Supervision.** Every message is held for human approval **by default** (manual mode). Approve/reject from the relay's terminal (a console REPL) or the optional web UI — both share live state. Flip to `auto` to let messages flow unsupervised.
+4. **Verifiable contracts.** Beyond prose, an agent can attach structured `data` + a JSON `schema`; the relay validates it on send and rejects malformed contracts — the receiver gets machine-checkable data, not just "trust my summary".
+5. **Supervision by risk.** Three modes: **manual** (every message waits for you — the default), **auto** (deliver everything), or **llm** (an LLM reviewer approves routine messages, blocks bad ones, and escalates anything risky to you). manual/auto never call an LLM (zero tokens); `llm` is opt-in.
 
 ## Architecture
 
@@ -90,13 +91,21 @@ The backend agent calls `agent_send("hector-team", "...", to: ["front"])`. In th
 
 Because there are no push notifications into a Claude turn, the receiving agent learns about messages when it next uses any switchboard tool (which carries an unread hint) or when it explicitly `agent_wait`s.
 
-## Manual-approval mode
+## Supervision modes: manual / auto / llm
 
-Manual mode is **on by default**. Every message an agent sends queues with status `pending` until you approve it — either from the terminal where the relay is running (typing `approve <id>` / `reject <id>` / `list`) or by clicking in the web UI. The relay's stdout doubles as a small REPL; type `help` for the full command list.
+Switch modes from the relay REPL (`manual` / `auto` / `llm`), the web-UI selector, or `POST /api/approval/mode {mode}` — all share live state.
 
-To run without supervision, start the relay with `--auto`, or type `auto` in the REPL (and `manual` to switch back). The web-UI toggle and the REPL share the same state.
+- **manual** (default) — every message queues `pending` until you approve it (`approve <id>` / `reject <id>` / `list` in the REPL, or click in the UI). No LLM, no tokens.
+- **auto** — deliver everything, no supervision (`switchboard start --auto` to start here). No LLM, no tokens.
+- **llm** — an LLM reviewer judges each message against a policy and **approves** routine ones, **rejects** clearly-bad ones, and **escalates** anything risky or ambiguous to you (escalated messages stay `pending`, flagged with the reviewer's reason). It **fails safe**: any reviewer error escalates — it never auto-approves.
+
+The reviewer is **opt-in** and needs a backend, picked automatically: the **Anthropic API** if `ANTHROPIC_API_KEY` is set (uses Haiku, cheap), otherwise the **`claude` CLI** if it's installed (uses your existing Claude Code auth, no key). If neither is present, `llm` mode is simply unavailable and you stay on manual/auto. Customize the reviewer's rubric with `switchboard start --review-policy ./policy.md` (and `--review-model` to change the model). The reviewer treats every message as untrusted data, so embedded "approve me" instructions don't sway it.
 
 The REPL also lets you wire up the topology yourself: `addto <agent> <channel>...` adds a running agent to channels, `removefrom` removes it, `channels` and `members <chan>` show membership.
+
+## Verifiable contracts
+
+`agent_send` takes optional `data` (a structured payload) and `schema` (a JSON Schema). When a schema is present the relay validates `data` against it on send and **rejects the message with 400 if it doesn't conform** — so what travels between agents is a checkable contract, not just prose the receiver has to trust. Plain-text messages still work; contracts are opt-in. Example: the backend announces `data: { revenue_cents: int, currency: string }` with a matching schema, and the frontend receives validated structured data plus the human-readable note.
 
 ## Channels, DMs, and @mentions
 
@@ -128,9 +137,12 @@ switchboard install --agent NAME         # re-register via claude (no .mcp.json)
 ## CLI reference
 
 ```
-switchboard start [--port N] [--host HOST] [--auto]
-    Start relay + UI + console supervisor. Manual approval is on by default;
-    pass --auto to start without supervision. --host 0.0.0.0 to allow remote agents.
+switchboard start [--port N] [--host HOST] [--auto] [--review-policy FILE] [--review-model ID]
+    Start relay + UI + console supervisor. Mode is 'manual' by default; pass
+    --auto to start unsupervised. The 'llm' mode (set in REPL/UI) needs a
+    reviewer — ANTHROPIC_API_KEY or the claude CLI. --review-policy sets the
+    reviewer rubric; --review-model overrides the model (default claude-haiku-4-5).
+    --host 0.0.0.0 to allow remote agents.
 switchboard mcp --agent NAME [--relay URL]
     Run as an MCP stdio server identified as NAME (spawned by Claude Code).
 switchboard install --agent NAME [--relay URL] [--scope local|user|project] [--force]
@@ -151,6 +163,8 @@ Relay REPL commands: `approve`/`reject`/`list`, `channels`, `members <chan>`, `a
 - [x] Auth tokens per agent
 - [x] Channels with membership, @mentions, inbox + blocking wait
 - [x] User-level install that doesn't touch the project `.mcp.json`
+- [x] Verifiable contracts (JSON-Schema-validated payloads)
+- [x] Risk-based gating (manual / auto / LLM reviewer with escalation)
 - [ ] SQLite persistence (currently in-memory; messages lost on restart)
 - [ ] Message editing in approval mode
 - [ ] TLS / hardening for public cross-machine relays
