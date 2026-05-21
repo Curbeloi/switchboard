@@ -2,7 +2,7 @@
 
 Supervised inter-agent messaging relay for [Claude Code](https://claude.com/claude-code) (or any MCP client). Two agents in different projects can exchange messages through named identities, while a human supervisor reads, intercepts, or approves every exchange — from the terminal (a console REPL) or an optional web UI.
 
-> Status: **alpha / v0.1** — base scaffold. APIs may change.
+> Status: **v1.0** — works end-to-end. Storage is in-memory (messages are lost on relay restart); SQLite persistence is on the roadmap.
 
 ## Why this exists
 
