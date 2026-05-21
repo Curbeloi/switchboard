@@ -1,0 +1,137 @@
+:root {
+  --bg: #0f1117;
+  --panel: #161922;
+  --border: #242837;
+  --text: #e6e8ee;
+  --muted: #7c8190;
+  --accent: #6ea8ff;
+  --good: #4caf7c;
+  --warn: #d6a44c;
+  --bad: #d65a4c;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+header h1 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: 0.5px;
+}
+.controls { display: flex; align-items: center; gap: 16px; }
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.toggle input { transform: scale(1.1); accent-color: var(--accent); }
+
+.status {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 10px;
+  background: var(--border);
+}
+.status-connecting { color: var(--warn); }
+.status-connected { color: var(--good); }
+.status-disconnected { color: var(--bad); }
+
+main {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  flex: 1;
+  min-height: 0;
+}
+
+aside {
+  border-right: 1px solid var(--border);
+  padding: 16px;
+  background: var(--panel);
+  overflow-y: auto;
+}
+aside h2 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin: 16px 0 8px 0;
+}
+aside h2:first-child { margin-top: 0; }
+aside ul { list-style: none; padding: 0; margin: 0; }
+aside li {
+  padding: 4px 0;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.muted { color: var(--muted); font-style: italic; }
+
+#feed {
+  padding: 16px 20px;
+  overflow-y: auto;
+}
+#feed h2 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  margin: 0 0 8px 0;
+}
+#messages, #pending {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 20px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.message {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--panel);
+  font-size: 13px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: start;
+}
+.message .from { color: var(--accent); font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.message .channel { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.message .content { white-space: pre-wrap; word-break: break-word; grid-column: 1 / -1; }
+.message .time { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+.message.pending { border-left: 3px solid var(--warn); }
+.message.rejected { opacity: 0.5; text-decoration: line-through; }
+
+.actions { display: flex; gap: 6px; grid-column: 1 / -1; }
+.actions button {
+  background: var(--border);
+  color: var(--text);
+  border: 0;
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.actions button:hover { background: var(--accent); color: var(--bg); }
+.actions button.reject:hover { background: var(--bad); color: var(--text); }

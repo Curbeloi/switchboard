@@ -1,0 +1,48 @@
+{
+  "name": "@icurbe/switchboard",
+  "version": "0.1.0",
+  "description": "Supervised inter-agent messaging relay for Claude Code (and any MCP client). Named identities, channel-based pub/sub, single-pane supervision UI with manual-approval mode.",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "switchboard": "bin/switchboard.js"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node bin/switchboard.js start",
+    "mcp": "node bin/switchboard.js mcp",
+    "dev": "node --watch bin/switchboard.js start",
+    "test": "node --test tests/"
+  },
+  "keywords": [
+    "claude-code",
+    "mcp",
+    "agent-communication",
+    "inter-agent",
+    "relay",
+    "supervision",
+    "ai-agents"
+  ],
+  "author": "Hector Curbelo Barrios <hcurbelo@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/icurbe/switchboard.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "express": "^4.21.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  }
+}

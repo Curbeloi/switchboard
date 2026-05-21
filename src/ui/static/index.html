@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>switchboard — supervision</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>switchboard</h1>
+      <div class="controls">
+        <label class="toggle">
+          <input type="checkbox" id="approval-mode" />
+          <span>Approval mode</span>
+        </label>
+        <span id="status" class="status status-connecting">connecting…</span>
+      </div>
+    </header>
+
+    <main>
+      <aside id="sidebar">
+        <h2>Agents</h2>
+        <ul id="agents"><li class="muted">no agents yet</li></ul>
+        <h2>Channels</h2>
+        <ul id="channels"><li class="muted">no channels yet</li></ul>
+      </aside>
+
+      <section id="feed">
+        <h2 id="pending-heading" hidden>Pending approval</h2>
+        <ul id="pending"></ul>
+
+        <h2>Stream</h2>
+        <ul id="messages"></ul>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

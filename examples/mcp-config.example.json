@@ -1,0 +1,9 @@
+{
+  "//": "Drop this into your project's .mcp.json (or merge into an existing one). One file per Claude Code project — give each agent a distinct --agent name.",
+  "mcpServers": {
+    "switchboard": {
+      "command": "switchboard",
+      "args": ["mcp", "--agent", "back", "--relay", "http://127.0.0.1:8765"]
+    }
+  }
+}
