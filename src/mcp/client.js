@@ -1,33 +1,53 @@
-/** Thin HTTP client to the relay. Throws on non-2xx. */
-export function createRelayClient(relayUrl) {
+/** Thin HTTP client to the relay. Throws on non-2xx (with `.status` set). */
+export function createRelayClient(relayUrl, token = null) {
   const base = relayUrl.replace(/\/+$/, "");
+  let authToken = token;
 
   async function request(path, init = {}) {
-    const res = await fetch(`${base}${path}`, {
-      ...init,
-      headers: {
-        "content-type": "application/json",
-        ...(init.headers ?? {}),
-      },
-    });
+    const headers = {
+      "content-type": "application/json",
+      ...(init.headers ?? {}),
+    };
+    if (authToken) headers["authorization"] = `Bearer ${authToken}`;
+    const res = await fetch(`${base}${path}`, { ...init, headers });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      throw new Error(`relay ${init.method ?? "GET"} ${path} failed: ${res.status} ${body}`);
+      const err = new Error(`relay ${init.method ?? "GET"} ${path} failed: ${res.status} ${body}`);
+      err.status = res.status;
+      throw err;
     }
     return res.json();
   }
 
   return {
-    registerAgent(name) {
+    setToken(t) {
+      authToken = t;
+    },
+    health() {
+      return request("/api/health");
+    },
+    registerAgent(name, existingToken = null) {
       return request("/api/agents/register", {
         method: "POST",
-        body: JSON.stringify({ name }),
+        body: JSON.stringify(existingToken ? { name, token: existingToken } : { name }),
       });
     },
-    postMessage({ channel, from, content }) {
+    joinChannel(channel) {
+      return request(`/api/channels/${encodeURIComponent(channel)}/join`, { method: "POST" });
+    },
+    leaveChannel(channel) {
+      return request(`/api/channels/${encodeURIComponent(channel)}/leave`, { method: "POST" });
+    },
+    postMessage({ channel, content, to }) {
       return request(`/api/channels/${encodeURIComponent(channel)}/messages`, {
         method: "POST",
-        body: JSON.stringify({ from, content }),
+        body: JSON.stringify(to && to.length ? { content, to } : { content }),
+      });
+    },
+    dm({ to, content }) {
+      return request("/api/dm", {
+        method: "POST",
+        body: JSON.stringify({ to, content }),
       });
     },
     readMessages({ channel, since = 0 }) {
@@ -37,8 +57,16 @@ export function createRelayClient(relayUrl) {
     listChannels() {
       return request("/api/channels");
     },
-    health() {
-      return request("/api/health");
+    listAgents() {
+      return request("/api/agents");
+    },
+    inbox() {
+      return request("/api/inbox");
+    },
+    wait({ channel = null, timeoutMs = 25000 } = {}) {
+      const qs = new URLSearchParams({ timeout_ms: String(timeoutMs) });
+      if (channel) qs.set("channel", channel);
+      return request(`/api/wait?${qs}`);
     },
   };
 }

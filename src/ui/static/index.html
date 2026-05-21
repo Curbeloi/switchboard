@@ -27,11 +27,16 @@
       </aside>
 
       <section id="feed">
-        <h2 id="pending-heading" hidden>Pending approval</h2>
+        <div id="channel-header">
+          <h2 id="channel-title">Select a channel</h2>
+          <div id="channel-meta" class="muted"></div>
+        </div>
+
+        <h3 id="pending-heading" hidden>Pending approval</h3>
         <ul id="pending"></ul>
 
-        <h2>Stream</h2>
         <ul id="messages"></ul>
+        <p id="empty-hint" class="muted">Pick a channel on the left to see its conversation.</p>
       </section>
     </main>
 

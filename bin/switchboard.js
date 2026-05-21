@@ -18,17 +18,20 @@ Usage:
       Run as an MCP stdio server. Registers as agent NAME against the relay.
       Defaults: --relay http://127.0.0.1:8765
 
-  switchboard install --agent NAME [--relay URL] [--force] [--print]
-      Add the switchboard MCP block to .mcp.json in the current directory.
-      Merges with existing mcpServers; pass --force to overwrite an existing
-      switchboard entry. --print outputs the result without writing.
+  switchboard install --agent NAME [--relay URL] [--scope SCOPE] [--force]
+      Register the switchboard MCP server for this project via the claude CLI
+      (default --scope local: per-project, stored in ~/.claude.json, never
+      touches the project's .mcp.json) and create the project's switchboard
+      skill. --scope is local | user | project. --force replaces an existing
+      registration and refreshes the skill.
 
-  switchboard uninstall
-      Remove the switchboard MCP block from .mcp.json in the current directory.
+  switchboard uninstall [--keep-skill]
+      Remove the switchboard MCP registration (via claude) and the project
+      skill. Pass --keep-skill to leave the skill in place.
 
   switchboard doctor [--relay URL]
-      Check that the relay is reachable and that .mcp.json in the current
-      directory is correctly configured.
+      Check that the relay is reachable, the MCP server is registered for this
+      project, and the skill is present.
 
   switchboard --help
       This help.
@@ -87,8 +90,8 @@ try {
       options: {
         agent: { type: "string" },
         relay: { type: "string", default: "http://127.0.0.1:8765" },
+        scope: { type: "string", default: "local" },
         force: { type: "boolean", default: false },
-        print: { type: "boolean", default: false },
       },
       strict: true,
     });
@@ -100,12 +103,16 @@ try {
     await installMcp({
       agent: values.agent,
       relay: values.relay,
+      scope: values.scope,
       force: values.force,
-      print: values.print,
     });
   } else if (subcommand === "uninstall") {
-    parseArgs({ args: rest, options: {}, strict: true });
-    await uninstallMcp();
+    const { values } = parseArgs({
+      args: rest,
+      options: { "keep-skill": { type: "boolean", default: false } },
+      strict: true,
+    });
+    await uninstallMcp({ keepSkill: values["keep-skill"] });
   } else if (subcommand === "doctor") {
     const { values } = parseArgs({
       args: rest,

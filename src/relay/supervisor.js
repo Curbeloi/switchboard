@@ -4,6 +4,10 @@ const HELP = `commands:
   approve <id>     deliver a pending message (id can be a prefix; 'all' approves every pending)
   reject  <id>     drop a pending message
   list             show pending messages
+  channels         list channels with members and message counts
+  members <chan>   show the members of a channel
+  addto <agent> <chan> [chan...]      add an agent to one or more channels
+  removefrom <agent> <chan> [chan...] remove an agent from one or more channels
   manual           turn approval mode on  (the default — every message waits)
   auto             turn approval mode off (deliver everything, no supervision)
   status           show current mode and pending count
@@ -142,6 +146,66 @@ export function startConsoleSupervisor({ store, broadcast }) {
         }
         const msg = rejectOne(matches[0].id);
         process.stdout.write(`rejected ${msg.id.slice(0, 8)} (${msg.from} → ${msg.channel})\n`);
+        return;
+      }
+
+      case "channels":
+      case "ch": {
+        const list = store.listChannels();
+        if (list.length === 0) {
+          process.stdout.write("no channels yet\n");
+          return;
+        }
+        for (const c of list) {
+          process.stdout.write(
+            `  ${c.name} — ${c.messageCount} msgs, members: ${c.members.join(", ") || "(none)"}\n`
+          );
+        }
+        return;
+      }
+
+      case "members": {
+        const name = args[0];
+        if (!name) {
+          process.stdout.write("usage: members <channel>\n");
+          return;
+        }
+        const members = store.channelMembers(name);
+        process.stdout.write(
+          members.length ? `${name}: ${members.join(", ")}\n` : `${name}: no members (or no such channel)\n`
+        );
+        return;
+      }
+
+      case "addto": {
+        const [agentName, ...chans] = args;
+        if (!agentName || chans.length === 0) {
+          process.stdout.write("usage: addto <agent> <channel> [channel...]\n");
+          return;
+        }
+        if (!store.hasAgent(agentName)) {
+          process.stdout.write(`unknown agent "${agentName}" (not registered)\n`);
+          return;
+        }
+        for (const c of chans) {
+          const result = store.joinChannel(c, agentName);
+          broadcast({ type: "channel.updated", channel: result });
+        }
+        process.stdout.write(`added "${agentName}" to: ${chans.join(", ")}\n`);
+        return;
+      }
+
+      case "removefrom": {
+        const [agentName, ...chans] = args;
+        if (!agentName || chans.length === 0) {
+          process.stdout.write("usage: removefrom <agent> <channel> [channel...]\n");
+          return;
+        }
+        for (const c of chans) {
+          const result = store.leaveChannel(c, agentName);
+          if (result) broadcast({ type: "channel.updated", channel: result });
+        }
+        process.stdout.write(`removed "${agentName}" from: ${chans.join(", ")}\n`);
         return;
       }
 

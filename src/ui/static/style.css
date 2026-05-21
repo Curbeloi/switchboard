@@ -84,15 +84,47 @@ aside li {
 }
 .muted { color: var(--muted); font-style: italic; }
 
+.channel-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.channel-item:hover { background: var(--border); }
+.channel-item.active { background: var(--accent); color: var(--bg); }
+.channel-item.active .ch-badge { background: var(--bg); color: var(--accent); }
+.channel-item .ch-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-badge {
+  background: var(--border);
+  color: var(--muted);
+  border-radius: 9px;
+  padding: 0 7px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 #feed {
   padding: 16px 20px;
   overflow-y: auto;
 }
-#feed h2 {
+#channel-header { margin-bottom: 12px; }
+#channel-title {
+  margin: 0;
+  font-size: 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: 0;
+}
+#channel-meta { font-size: 12px; margin-top: 2px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+#feed h3 {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 1px;
-  color: var(--muted);
+  color: var(--warn);
   margin: 0 0 8px 0;
 }
 #messages, #pending {
@@ -112,13 +144,13 @@ aside li {
   font-size: 13px;
   display: grid;
   grid-template-columns: auto 1fr auto;
-  gap: 12px;
-  align-items: start;
+  gap: 4px 12px;
+  align-items: baseline;
 }
 .message .from { color: var(--accent); font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.message .channel { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.message .to { color: var(--good); font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; justify-self: start; }
 .message .content { white-space: pre-wrap; word-break: break-word; grid-column: 1 / -1; }
-.message .time { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.message .time { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; justify-self: end; }
 
 .message.pending { border-left: 3px solid var(--warn); }
 .message.rejected { opacity: 0.5; text-decoration: line-through; }
