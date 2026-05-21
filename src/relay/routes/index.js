@@ -1,7 +1,21 @@
 import { Router } from "express";
 import Ajv from "ajv";
+import { DEFAULT_POLICY } from "../reviewer.js";
 
 const ajv = new Ajv({ allErrors: true, strict: false });
+
+/** Compile a JSON Schema, returning an error string or null if it's valid. */
+function schemaError(schema) {
+  if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
+    return "schema must be a JSON Schema object";
+  }
+  try {
+    ajv.compile(schema);
+    return null;
+  } catch (e) {
+    return `invalid schema: ${e.message}`;
+  }
+}
 
 const publicAgent = (a) => ({
   name: a.name,
@@ -9,7 +23,7 @@ const publicAgent = (a) => ({
   lastSeenAt: a.lastSeenAt,
 });
 
-export function mountRoutes(app, { store, broadcast, reviewer = null }) {
+export function mountRoutes(app, { store, broadcast, reviewer = null, config = null }) {
   const api = Router();
   const reviewerAvailable = Boolean(reviewer?.available);
 
@@ -123,20 +137,28 @@ export function mountRoutes(app, { store, broadcast, reviewer = null }) {
     if (unknown.length) {
       return res.status(400).json({ error: `unknown agent(s) in 'to': ${unknown.join(", ")}` });
     }
-    // Verifiable contract (opt-in): if a JSON Schema is supplied, `data` must
-    // satisfy it. A malformed contract is rejected here, before it can queue.
+    // Verifiable contract (opt-in). Two ways to attach one:
+    //  - `contract: "<name>"` — reference a named schema saved in the config dir.
+    //  - `schema: {...}` — an inline JSON Schema (one-off).
+    // Either way `data` must satisfy it; a malformed contract is rejected here,
+    // before it can queue.
     const data = req.body?.data ?? null;
-    const schema = req.body?.schema ?? null;
+    const contractName = req.body?.contract ?? null;
+    let schema = req.body?.schema ?? null;
+    if (contractName != null) {
+      if (typeof contractName !== "string" || !config) {
+        return res.status(400).json({ error: "contract must be a known contract name" });
+      }
+      const stored = config.getContract(contractName);
+      if (!stored) {
+        return res.status(400).json({ error: `unknown contract: ${contractName}` });
+      }
+      schema = stored;
+    }
     if (schema != null) {
-      if (typeof schema !== "object") {
-        return res.status(400).json({ error: "schema must be a JSON Schema object" });
-      }
-      let validate;
-      try {
-        validate = ajv.compile(schema);
-      } catch (e) {
-        return res.status(400).json({ error: `invalid schema: ${e.message}` });
-      }
+      const err = schemaError(schema);
+      if (err) return res.status(400).json({ error: err });
+      const validate = ajv.compile(schema);
       if (!validate(data)) {
         return res.status(400).json({
           error: "contract validation failed",
@@ -151,6 +173,7 @@ export function mountRoutes(app, { store, broadcast, reviewer = null }) {
       to,
       data,
       schema,
+      contract: contractName,
     });
     broadcast({
       type: msg.status === "pending" ? "message.pending" : "message.delivered",
@@ -216,6 +239,7 @@ export function mountRoutes(app, { store, broadcast, reviewer = null }) {
       });
     }
     const mode = store.setMode(next);
+    config?.saveConfig({ mode });
     broadcast({ type: "approval.mode", mode });
     res.json({ mode });
   });
@@ -230,6 +254,101 @@ export function mountRoutes(app, { store, broadcast, reviewer = null }) {
     if (!msg) return res.status(404).json({ error: "not found" });
     broadcast({ type: "message.rejected", message: msg });
     res.json(msg);
+  });
+
+  /* Setup wizard + config editing (human surfaces — no agent token required).
+   * The config dir is the durable source of truth; these read/write it. */
+
+  // First-run status + current config. `needed` drives the web wizard.
+  api.get("/setup", (_req, res) => {
+    if (!config) return res.json({ needed: false, configured: false });
+    res.json({
+      needed: !config.isSetupComplete(),
+      configDir: config.dir,
+      mode: store.getMode(),
+      policy: config.readPolicy() ?? "",
+      defaultPolicy: DEFAULT_POLICY,
+      contracts: config.listContracts(),
+      reviewer: reviewerInfo,
+    });
+  });
+
+  // Complete (or re-run) setup: write mode + policy + contracts in one shot.
+  api.post("/setup", (req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    const { mode, policy, contracts } = req.body ?? {};
+    if (mode != null && !["manual", "auto", "llm"].includes(mode)) {
+      return res.status(400).json({ error: "mode must be manual | auto | llm" });
+    }
+    if (mode === "llm" && !reviewerAvailable) {
+      return res.status(409).json({
+        error: "llm mode unavailable: no reviewer (set ANTHROPIC_API_KEY or install the claude CLI, then restart)",
+      });
+    }
+    const list = Array.isArray(contracts) ? contracts : [];
+    for (const c of list) {
+      if (!config.validName(c?.name)) {
+        return res.status(400).json({ error: `invalid contract name: ${c?.name}` });
+      }
+      const err = schemaError(c?.schema);
+      if (err) return res.status(400).json({ error: `contract "${c.name}": ${err}` });
+    }
+    if (typeof policy === "string") config.savePolicy(policy);
+    for (const c of list) config.saveContract(c.name, c.schema);
+    const appliedMode = mode ?? store.getMode();
+    store.setMode(appliedMode);
+    config.saveConfig({ mode: appliedMode, setupComplete: true });
+    reviewer?.setPolicy?.(config.readPolicy());
+    broadcast({ type: "approval.mode", mode: appliedMode });
+    broadcast({ type: "setup.updated", needed: false });
+    res.json({
+      needed: false,
+      mode: appliedMode,
+      policy: config.readPolicy() ?? "",
+      contracts: config.listContracts(),
+    });
+  });
+
+  // Contracts CRUD (named JSON Schemas).
+  api.get("/contracts", (_req, res) => {
+    res.json(config ? config.listContracts() : []);
+  });
+  api.put("/contracts/:name", (req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    const { name } = req.params;
+    if (!config.validName(name)) {
+      return res.status(400).json({ error: "invalid contract name (use A-Z a-z 0-9 . _ -, max 64)" });
+    }
+    const schema = req.body?.schema ?? req.body;
+    const err = schemaError(schema);
+    if (err) return res.status(400).json({ error: err });
+    config.saveContract(name, schema);
+    broadcast({ type: "contracts.updated" });
+    res.json({ name, schema });
+  });
+  api.delete("/contracts/:name", (req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    if (!config.deleteContract(req.params.name)) {
+      return res.status(404).json({ error: "contract not found" });
+    }
+    broadcast({ type: "contracts.updated" });
+    res.json({ ok: true });
+  });
+
+  // Reviewer policy (read/edit) — live-applied to the reviewer.
+  api.get("/policy", (_req, res) => {
+    res.json({ policy: config?.readPolicy() ?? "", defaultPolicy: DEFAULT_POLICY });
+  });
+  api.put("/policy", (req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    const text = req.body?.policy;
+    if (typeof text !== "string") {
+      return res.status(400).json({ error: "policy required (string)" });
+    }
+    config.savePolicy(text);
+    reviewer?.setPolicy?.(text);
+    broadcast({ type: "policy.updated" });
+    res.json({ policy: text });
   });
 
   app.use("/api", api);

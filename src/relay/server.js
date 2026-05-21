@@ -6,6 +6,7 @@ import { WebSocketServer } from "ws";
 import { createStore } from "./store.js";
 import { mountRoutes } from "./routes/index.js";
 import { createReviewer } from "./reviewer.js";
+import { createConfigStore } from "./config.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -16,9 +17,20 @@ export async function startRelay({
   host = "127.0.0.1",
   reviewPolicy,
   reviewModel,
+  configDir,
 } = {}) {
+  const config = createConfigStore(configDir);
   const store = createStore();
-  const reviewer = createReviewer({ policy: reviewPolicy, model: reviewModel });
+  // Restore persisted state written by the setup wizard / edit UI.
+  const saved = config.readConfig();
+  if (saved.mode) {
+    try { store.setMode(saved.mode); } catch { /* ignore invalid persisted mode */ }
+  }
+  // Policy precedence: --review-policy flag > persisted policy.md > built-in default.
+  const reviewer = createReviewer({
+    policy: reviewPolicy ?? config.readPolicy() ?? undefined,
+    model: reviewModel,
+  });
   const app = express();
   app.use(express.json({ limit: "1mb" }));
 
@@ -41,7 +53,7 @@ export async function startRelay({
     return () => localListeners.delete(fn);
   }
 
-  mountRoutes(app, { store, broadcast, reviewer });
+  mountRoutes(app, { store, broadcast, reviewer, config });
 
   /* In "llm" mode, the reviewer drains the pending queue automatically:
    *  approve/reject deliver or drop the message; escalate leaves it pending
@@ -96,7 +108,7 @@ export async function startRelay({
           ? `  LLM reviewer:    available (${reviewer.backend}) — 'llm' mode enabled\n`
           : `  LLM reviewer:    unavailable (no ANTHROPIC_API_KEY and no claude CLI) — 'llm' mode disabled\n`
       );
-      resolve({ server, store, broadcast, subscribe, reviewer });
+      resolve({ server, store, broadcast, subscribe, reviewer, config });
     });
   });
 }

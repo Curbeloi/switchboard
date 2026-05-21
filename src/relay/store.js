@@ -160,7 +160,7 @@ export function createStore() {
     },
 
     /* messages */
-    postMessage({ channel, from, content, to = [], data = null, schema = null }) {
+    postMessage({ channel, from, content, to = [], data = null, schema = null, contract = null }) {
       const ch = getChannel(channel);
       ch.members.add(from); // sender is implicitly a member
       for (const m of to) ch.members.add(m); // tagged agents join the channel
@@ -172,6 +172,7 @@ export function createStore() {
         to,
         data,
         schema,
+        contract,
         createdAt: Date.now(),
         status: mode === "auto" ? "delivered" : "pending",
       };
@@ -275,6 +276,7 @@ export function createStore() {
  * @property {string[]} to
  * @property {object|null} data
  * @property {object|null} schema
+ * @property {string|null} contract
  * @property {number} createdAt
  * @property {"delivered" | "pending" | "rejected"} status
  * @property {{decision: string, reason: string, at: number}} [review]

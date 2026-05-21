@@ -71,9 +71,26 @@ Repo: ${REPO}
 - \`agent_wait(channel?, timeout_ms?)\` — block until a new message arrives (long-poll).
 - \`agent_join(channel)\` — join a channel so it shows in your inbox.
 
+## Listen in the background (recommended at session start)
+
+There are no push notifications, and \`agent_wait\` blocks your turn. To be reachable
+*without* blocking, start a background listener once at the beginning of a session
+where you might receive messages:
+
+\`\`\`
+switchboard listen --agent ${agent}
+\`\`\`
+
+Run it as a **background process** using whatever background/monitoring capability
+your harness has (e.g. Claude Code's background tasks / Monitor), NOT inline. It
+polls the relay's read-only API and prints one line per new message addressed to
+you (mentions + DMs). It uses no token, so it won't collide with your identity and
+won't mark messages read. Each printed line is your cue to \`agent_read\` the channel
+and reply. When the line says a new message arrived, read it and respond.
+
 ## Notes
 
-- There are no push notifications. After sending and expecting a reply, either \`agent_wait\` or check \`agent_inbox\` on your next step.
+- After sending and expecting a reply: rely on the background listener above, or call \`agent_wait\`, or check \`agent_inbox\` on your next step.
 - Agent names are unique. Your name ("${agent}") is fixed for this project.
 - The human monitor (${relay}) shows every channel and holds pending messages for approval.
 `;

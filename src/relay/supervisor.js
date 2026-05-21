@@ -27,7 +27,7 @@ function preview(text, n) {
  * or rejecting queued messages without opening the web UI. Skips itself if
  * stdin is not a TTY (e.g. when the relay is run under systemd / nohup).
  */
-export function startConsoleSupervisor({ store, broadcast, reviewer = null }) {
+export function startConsoleSupervisor({ store, broadcast, reviewer = null, config = null }) {
   if (!process.stdin.isTTY) return null;
 
   const rl = readline.createInterface({
@@ -236,6 +236,7 @@ export function startConsoleSupervisor({ store, broadcast, reviewer = null }) {
       case "auto":
       case "manual": {
         const m = store.setMode(cmd);
+        config?.saveConfig({ mode: m });
         broadcast({ type: "approval.mode", mode: m });
         return;
       }
@@ -248,6 +249,7 @@ export function startConsoleSupervisor({ store, broadcast, reviewer = null }) {
           return;
         }
         const m = store.setMode("llm");
+        config?.saveConfig({ mode: m });
         broadcast({ type: "approval.mode", mode: m });
         return;
       }

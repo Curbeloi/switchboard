@@ -5,6 +5,7 @@ import { startRelay } from "../src/relay/server.js";
 import { startConsoleSupervisor } from "../src/relay/supervisor.js";
 import { runMcp } from "../src/mcp/server.js";
 import { installMcp, uninstallMcp, doctor } from "../src/install.js";
+import { runListen } from "../src/listen.js";
 
 const HELP = `switchboard — supervised inter-agent messaging relay
 
@@ -17,11 +18,21 @@ Usage:
       supervision. The 'llm' mode (set in the REPL/UI) uses an LLM reviewer —
       available when ANTHROPIC_API_KEY is set or the claude CLI is installed.
       --review-policy points at a markdown rubric for the reviewer; --review-model
-      overrides the model (default claude-haiku-4-5).
+      overrides the model (default claude-haiku-4-5). --config-dir overrides where
+      contracts/policy/mode are stored (default ~/.switchboard). On first run the
+      web UI walks you through setup and writes those files.
 
   switchboard mcp --agent NAME [--relay URL]
       Run as an MCP stdio server. Registers as agent NAME against the relay.
       Defaults: --relay http://127.0.0.1:8765
+
+  switchboard listen --agent NAME [--relay URL] [--interval SECONDS] [--all]
+      Background listener: poll the relay's read-only API and print one line per
+      new message addressed to NAME (mentions + DMs), so a session harness that
+      turns stdout into notifications can wake the agent without blocking its
+      turn. Uses no agent token (no identity collision, never marks messages
+      read). --all notifies on every message in your channels. Defaults:
+      --relay http://127.0.0.1:8765, --interval 10.
 
   switchboard install --agent NAME [--relay URL] [--scope SCOPE] [--force]
       Register the switchboard MCP server for this project via the claude CLI
@@ -63,6 +74,7 @@ try {
         auto: { type: "boolean", default: false },
         "review-policy": { type: "string" },
         "review-model": { type: "string" },
+        "config-dir": { type: "string" },
       },
       strict: true,
     });
@@ -75,6 +87,7 @@ try {
       host: values.host,
       reviewPolicy,
       reviewModel: values["review-model"],
+      configDir: values["config-dir"],
     });
     if (values.auto) {
       relay.store.setMode("auto");
@@ -84,6 +97,7 @@ try {
       store: relay.store,
       broadcast: relay.broadcast,
       reviewer: relay.reviewer,
+      config: relay.config,
     });
     if (supervisor) relay.subscribe(supervisor.onEvent);
   } else if (subcommand === "mcp") {
@@ -101,6 +115,29 @@ try {
       process.exit(2);
     }
     await runMcp({ agent: values.agent, relayUrl: values.relay });
+  } else if (subcommand === "listen") {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        agent: { type: "string" },
+        relay: { type: "string", default: "http://127.0.0.1:8765" },
+        interval: { type: "string", default: "10" },
+        all: { type: "boolean", default: false },
+      },
+      strict: true,
+    });
+    if (!values.agent) {
+      process.stderr.write("error: --agent NAME is required\n\n");
+      help();
+      process.exit(2);
+    }
+    const seconds = Number(values.interval);
+    await runListen({
+      agent: values.agent,
+      relayUrl: values.relay,
+      intervalMs: Math.max(2, Number.isFinite(seconds) ? seconds : 10) * 1000,
+      all: values.all,
+    });
   } else if (subcommand === "install") {
     const { values } = parseArgs({
       args: rest,

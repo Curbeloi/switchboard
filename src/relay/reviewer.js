@@ -6,8 +6,9 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_MODEL = "claude-haiku-4-5";
 
 /** The rubric the LLM judges against. Static across messages → marked for
- *  prompt caching. Override with --review-policy / SWITCHBOARD_REVIEW_POLICY. */
-const DEFAULT_POLICY = `You are the supervision gate for "switchboard", a relay that passes messages between autonomous AI coding agents working in different projects. You review ONE outgoing message and decide whether it can be delivered automatically, must be blocked, or needs a human.
+ *  prompt caching. Override with --review-policy / SWITCHBOARD_REVIEW_POLICY,
+ *  or edit it from the web UI (which writes ~/.switchboard/policy.md). */
+export const DEFAULT_POLICY = `You are the supervision gate for "switchboard", a relay that passes messages between autonomous AI coding agents working in different projects. You review ONE outgoing message and decide whether it can be delivered automatically, must be blocked, or needs a human.
 
 Return one of three decisions:
 - "approve": routine, low-risk coordination — sharing status, asking a question, reporting progress, handing off information, agreeing on an interface. Safe to deliver without a human.
@@ -89,7 +90,13 @@ export function createReviewer({
   policy,
   allowCli = true,
 } = {}) {
-  const rubric = policy && policy.trim() ? policy : DEFAULT_POLICY;
+  /* Mutable so the rubric can be edited live from the web UI without a restart.
+   *  review() reads it each call; changing it shifts the prompt-cache breakpoint
+   *  (rare, so the cache hit on a stable rubric still pays off). */
+  let rubric = policy && policy.trim() ? policy : DEFAULT_POLICY;
+  const setPolicy = (text) => {
+    rubric = text && text.trim() ? text : DEFAULT_POLICY;
+  };
 
   /* Backend 1: Anthropic API (preferred — fast, cheap Haiku, cached rubric). */
   if (apiKey) {
@@ -122,7 +129,7 @@ export function createReviewer({
         return { decision: "escalate", reason: `reviewer error: ${err.message}` };
       }
     }
-    return { available: true, backend: "api", model, review };
+    return { available: true, backend: "api", model, review, setPolicy };
   }
 
   /* Backend 2: Claude Code CLI headless (no API key needed). */
@@ -148,8 +155,8 @@ export function createReviewer({
         return { decision: "escalate", reason: `reviewer (cli) error: ${err.message}` };
       }
     }
-    return { available: true, backend: "claude-cli", model: "claude-cli", review };
+    return { available: true, backend: "claude-cli", model: "claude-cli", review, setPolicy };
   }
 
-  return { available: false, backend: null, model: null, review: null };
+  return { available: false, backend: null, model: null, review: null, setPolicy };
 }

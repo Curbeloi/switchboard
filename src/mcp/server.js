@@ -67,6 +67,10 @@ const TOOLS = [
           type: "object",
           description: "Optional: a JSON Schema that `data` must satisfy. The relay validates `data` against it on send and rejects the message if it doesn't conform — so the contract is verified, not just asserted.",
         },
+        contract: {
+          type: "string",
+          description: "Optional: the name of a predefined contract (a JSON Schema saved on the relay). The relay validates `data` against that named schema. Use this instead of `schema` to reuse an agreed contract by name rather than re-sending the whole schema.",
+        },
       },
       required: ["channel", "content"],
     },
@@ -232,7 +236,7 @@ export async function runMcp({ agent, relayUrl }) {
   }
 
   const server = new Server(
-    { name: "@icurbe/switchboard", version: "2.2.1" },
+    { name: "@icurbe/switchboard", version: "2.3.0" },
     { capabilities: { tools: {} } }
   );
 
@@ -243,15 +247,17 @@ export async function runMcp({ agent, relayUrl }) {
     try {
       switch (name) {
         case "agent_send": {
-          const { channel, content, to, data, schema } = args;
+          const { channel, content, to, data, schema, contract } = args;
           const toList = Array.isArray(to) ? to : to ? [to] : [];
           const msg = await call(() =>
-            client.postMessage({ channel, content, to: toList, data, schema })
+            client.postMessage({ channel, content, to: toList, data, schema, contract })
           );
           const tag = toList.length ? ` (to: ${toList.join(", ")})` : "";
-          const contract = schema ? " [contract validated]" : "";
+          const validated = schema || contract
+            ? ` [contract validated${contract ? `: ${contract}` : ""}]`
+            : "";
           return reply(
-            `posted message ${msg.id} to channel "${channel}" as "${agent}"${tag}${contract} (status: ${msg.status})`
+            `posted message ${msg.id} to channel "${channel}" as "${agent}"${tag}${validated} (status: ${msg.status})`
           );
         }
         case "agent_dm": {

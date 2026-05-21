@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`@icurbe/switchboard` — a supervised inter-agent messaging relay for Claude Code (or any MCP client). Claude Code sessions in different working directories exchange messages through token-authenticated named identities and channels (with @mention-style addressing), supervised by a human from a console REPL or a web UI. See README.md for the user-facing pitch, quickstart, and the v1→v2 migration guide.
+`@icurbe/switchboard` — a supervised inter-agent messaging relay for Claude Code (or any MCP client). Claude Code sessions in different working directories exchange messages through token-authenticated named identities and channels (with @mention-style addressing), supervised by a human from a console REPL or a web UI. See README.md for the user-facing pitch and quickstart.
 
 ## Run / build / test
 
@@ -25,13 +25,17 @@ Two halves of a single package, separated by a network boundary:
 
 - **Relay side** (`src/relay/`) — the daemon. `server.js` mounts Express on the same `http.Server` as a `ws.WebSocketServer` (path `/subscribe`) and serves `src/ui/static/` at `/`. REST endpoints live in `routes/index.js` under `/api`. The data layer is `store.js`, an in-memory closure-based factory (the SQLite-swap seam — don't leak its internals into routes). `supervisor.js` is the in-process console REPL; it `subscribe()`s to broadcast events and shares the relay's stdout, and skips itself when stdin isn't a TTY.
 
-- **MCP side** (`src/mcp/`) — the per-session wrapper. `server.js` exposes seven tools (`agent_send`, `agent_dm`, `agent_read`, `agent_inbox`, `agent_wait`, `agent_join`, `agent_list_channels`) over stdio. On startup it does `/api/health`, registers (obtaining a token), ensures the project skill exists, and exits non-zero if the relay is unreachable or the name is taken. All HTTP goes through `client.js` (`createRelayClient(url, token)`), the only place that knows the relay URL/auth shape.
+- **MCP side** (`src/mcp/`) — the per-session wrapper. `server.js` exposes eight tools (`agent_send`, `agent_dm`, `agent_read`, `agent_inbox`, `agent_wait`, `agent_join`, `agent_list_channels`, `agent_list_agents`) over stdio. On startup it does `/api/health`, registers (obtaining a token), ensures the project skill exists, and exits non-zero if the relay is unreachable or the name is taken. All HTTP goes through `client.js` (`createRelayClient(url, token)`), the only place that knows the relay URL/auth shape.
+
+- **Config store** (`src/relay/config.js`) — durable on-disk config under `~/.switchboard` (override `--config-dir`): `config.json` (mode + setupComplete), `policy.md` (reviewer rubric), `contracts/<name>.json` (named JSON Schemas). The relay reads it on boot to restore mode/policy; the web setup wizard and Settings panel write it. Unlike the message store, this **persists** across restarts.
+
+- **Background listener** (`src/listen.js`, `switchboard listen --agent NAME`) — polls the relay's read-only endpoints (no token) and prints one stdout line per new message addressed to the agent (mentions + DMs), so a harness that turns stdout into notifications wakes the agent without blocking. Decoupled from consumption: it never advances read cursors. The generated skill tells each session to run it in the background.
 
 - **Install/skill** (`src/install.js`) — `installMcp` shells out to the `claude` CLI (`claude mcp add --scope local`) so it never writes the project's `.mcp.json`; `ensureSkill` writes `.claude/skills/switchboard/SKILL.md` (idempotent). `uninstallMcp` removes the registration, cleans any legacy `.mcp.json` entry, and removes the skill. `doctor` checks relay + registration + skill.
 
-- **Supervision UI** (`src/ui/static/`) — vanilla HTML/CSS/JS, no build. `app.js` opens one WebSocket to `/subscribe`, bootstraps via REST GETs, and shows a per-channel conversation view (click a channel → only its messages). Reacts to `agent.registered`, `channel.updated`, `message.delivered|pending|escalated|rejected`, `message.read`, `approval.mode`. The mode control is a 3-way select (`llm` disabled when no reviewer); pending items render the reviewer's decision/reason and any structured `data`.
+- **Supervision UI** (`src/ui/static/`) — vanilla HTML/CSS/JS, no build. `app.js` opens one WebSocket to `/subscribe`, bootstraps via REST GETs, and shows a per-channel conversation view (click a channel → only its messages). Reacts to `agent.registered`, `channel.updated`, `message.delivered|pending|escalated|rejected`, `message.read`, `approval.mode`, `setup.updated`, `contracts.updated`, `policy.updated`. The mode control is a 3-way select (`llm` disabled when no reviewer); pending items render the reviewer's decision/reason and any structured `data`. On first run (when `~/.switchboard` config is missing) it shows a step-by-step **setup wizard** (mode → policy → contracts) that POSTs `/api/setup`; a **⚙ Settings** overlay edits mode/policy/contracts live afterward.
 
-`bin/switchboard.js` is a thin `parseArgs` dispatcher: `start` / `mcp` / `install` / `uninstall` / `doctor`.
+`bin/switchboard.js` is a thin `parseArgs` dispatcher: `start` / `mcp` / `listen` / `install` / `uninstall` / `doctor`.
 
 ### Message flow
 
@@ -48,7 +52,7 @@ Supervision is a global **mode** (`store.getMode()`/`setMode()`): `manual` (defa
 
 `llm` mode: `src/relay/reviewer.js` (`createReviewer`) judges each pending message against a rubric and returns `approve` / `reject` / `escalate`. server.js wires it via `subscribe()` on `message.pending` (only when `mode === "llm"`): approve→`approvePending`, reject→`rejectPending`, escalate→`markEscalated` (stays pending for a human, broadcasts `message.escalated`). **Fail safe: any reviewer error escalates — never auto-approves.** Two backends, picked at startup: the Anthropic API (Haiku + cached rubric) when `ANTHROPIC_API_KEY` is set, else `claude -p` headless when the `claude` CLI exists; otherwise the reviewer is unavailable and `llm` mode is rejected (409). The rubric treats the message as untrusted data (prompt-injection surface).
 
-Verifiable contracts: `agent_send` accepts optional `data` + `schema` (JSON Schema). `routes/index.js` validates `data` against `schema` with `ajv` on post and returns 400 if it fails — a malformed contract never queues. The reviewer receives the (validated) structured data.
+Verifiable contracts: `agent_send` accepts optional `data` plus either an inline `schema` (JSON Schema) or a `contract` name (resolved from the config store's `contracts/<name>.json`). `routes/index.js` validates `data` against the schema with `ajv` on post and returns 400 if it fails — a malformed contract never queues. The reviewer receives the (validated) structured data.
 
 ### Identity, channels, inbox, wake
 
@@ -64,7 +68,7 @@ Verifiable contracts: `agent_send` accepts optional `data` + `schema` (JSON Sche
 - **Routes use only the store's documented methods** — keeps the SQLite swap clean.
 - **Broadcasts are fire-and-forget**, fanned out to WS subscribers (UI) and in-process `subscribe(fn)` listeners (the supervisor). Waiter resolution lives inside the store (`notifyWaiters`), not in routes.
 - **Install never writes the project `.mcp.json`.** It uses `claude mcp add --scope local`. The only project files switchboard writes are under `.claude/skills/switchboard/`.
-- **No persistence.** Agents, channels, messages, cursors, tokens, approval toggle are all in-memory and lost on relay restart (wrappers re-register on next call via the 401-retry path).
+- **Message store is in-memory; config is on disk.** Agents, channels, messages, cursors, and tokens are in-memory and lost on relay restart (wrappers re-register on next call via the 401-retry path). The supervision **mode**, reviewer **policy**, and named **contracts** persist to `~/.switchboard` via `config.js` and are restored on boot.
 
 ## Where to make common changes
 
@@ -72,4 +76,5 @@ Verifiable contracts: `agent_send` accepts optional `data` + `schema` (JSON Sche
 - New REST endpoint → `src/relay/routes/index.js`.
 - New broadcast event → emit from a route (or the store), then handle it in `app.js`'s `handle()` switch.
 - New supervisor command → `HELP` + the `handle()` switch in `src/relay/supervisor.js`.
+- New persisted config (contracts/policy/mode/setup) → add IO to `src/relay/config.js`, expose it via routes (`/api/setup`, `/api/contracts`, `/api/policy`), and wire the wizard/Settings in `app.js`.
 - Swapping the store for SQLite → reimplement `createStore()` in `src/relay/store.js` with the same return shape.

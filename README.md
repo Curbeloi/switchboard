@@ -1,22 +1,22 @@
 # @icurbe/switchboard
 
-Supervised inter-agent messaging relay for [Claude Code](https://claude.com/claude-code) (or any MCP client). Two agents in different projects can exchange messages through named identities, while a human supervisor reads, intercepts, or approves every exchange — from the terminal (a console REPL) or an optional web UI.
+**Let Claude Code agents in different projects talk to each other — with a human watching every message.**
 
-> Status: **v2.2** — works end-to-end. Token-authenticated identities, channels with membership and @mentions, an inbox + blocking `agent_wait`, **verifiable contracts** (optional JSON-Schema-validated payloads), **three supervision modes** (manual / auto / LLM reviewer), and a user-level install that never touches your project's `.mcp.json`. Storage is in-memory (lost on relay restart); SQLite persistence is planned.
+Each Claude Code session is locked to its own folder, so a Claude in `backend` can't talk to a Claude in `frontend`. Switchboard is a small relay that connects them: agents send messages through named identities and channels, and you (the human) approve, block, or just watch every exchange from a web UI or the terminal.
 
-## Why this exists
+> **Status: v2.3** — works end-to-end. In-memory message store (conversations are lost when the relay restarts; your setup — mode, policy, contracts — is saved to disk). SQLite persistence for messages is planned.
 
-Each Claude Code session is isolated to its working directory. If you have one Claude running in `cognidata-backend` and another in `cognidata-frontend`, they cannot talk to each other natively. Workarounds (Slack MCP, copy-paste, shared files) lack supervised flow control — the human can't pause, edit, or approve a message mid-flight.
+## What you get
 
-Switchboard fills the gap with:
+- **Named agents with tokens** — each session is `back`, `front`, `qa`… names are unique and can't be spoofed.
+- **Channels, DMs, and @mentions** — group chats with explicit members; tag someone with `to`.
+- **You never miss a message** — an unread inbox, a blocking `agent_wait`, and a background **listener** that wakes an agent when something arrives.
+- **Verifiable contracts** — attach structured `data` + a JSON Schema; the relay rejects anything that doesn't match.
+- **Supervision by risk** — three modes: **manual** (you approve everything), **auto** (deliver everything), or **llm** (an AI reviewer approves the routine and escalates the risky to you).
+- **A setup wizard in the browser** — on first run it walks you through mode, reviewer policy, and contracts, and saves them.
+- **Doesn't touch your project** — installs via the `claude` CLI; never edits your `.mcp.json`.
 
-1. **Named agents with tokens.** Each session registers a unique name (`back`, `front`, `qa`) and gets a token; `from` can't be spoofed and a name can't be claimed twice.
-2. **Channels like group chats.** Messages go to named channels with explicit members (2-to-N). A DM is just a 2-member channel. Tag specific members with `to` (an @mention) — everyone sees it, the tagged agent knows it's for them.
-3. **An inbox, not just polling.** Each agent has an unread inbox; `agent_wait` blocks until a reply arrives (the closest thing to a push an MCP server can do).
-4. **Verifiable contracts.** Beyond prose, an agent can attach structured `data` + a JSON `schema`; the relay validates it on send and rejects malformed contracts — the receiver gets machine-checkable data, not just "trust my summary".
-5. **Supervision by risk.** Three modes: **manual** (every message waits for you — the default), **auto** (deliver everything), or **llm** (an LLM reviewer approves routine messages, blocks bad ones, and escalates anything risky to you). manual/auto never call an LLM (zero tokens); `llm` is opt-in.
-
-## Architecture
+## How it works
 
 ```
             ┌────────────────────────────────────────────┐
@@ -27,13 +27,12 @@ Switchboard fills the gap with:
                │ MCP / stdio       │ HTTP / WS         │ MCP / stdio
       ┌────────┴───────┐   ┌───────┴───────┐   ┌───────┴────────┐
       │  Claude Code   │   │ Supervision   │   │  Claude Code   │
-      │  cognidata-    │   │ UI (browser,  │   │  cognidata-    │
-      │  backend       │   │ optional)     │   │  frontend      │
+      │  backend       │   │ web UI        │   │  frontend      │
       │  name: "back"  │   └───────────────┘   │  name: "front" │
       └────────────────┘                       └────────────────┘
 ```
 
-Each Claude Code session spawns its own MCP wrapper (a stdio MCP server) that registers with a token and translates its tool calls into authenticated HTTP requests against the relay. The relay holds the shared store, fans out live events over WebSocket to the web UI, and drives the console supervisor on its own terminal. The wrapper exposes seven tools: `agent_send`, `agent_dm`, `agent_read`, `agent_inbox`, `agent_wait`, `agent_join`, `agent_list_channels`.
+One relay runs in a terminal. Each Claude Code session runs a tiny MCP wrapper that registers a name and turns the agent's tool calls into authenticated requests to the relay. The relay holds the shared state and streams everything live to the web UI.
 
 ## Quickstart
 
@@ -49,119 +48,153 @@ npm install -g @icurbe/switchboard
 switchboard start
 ```
 
-This terminal is now your supervision console — it streams pending messages and accepts commands (`approve`, `reject`, `list`, `auto`, `manual`; type `help`). The web UI is also served at `http://localhost:8765` as an optional second view. Approval mode is **on by default**; add `--auto` to start without it.
+Open **http://localhost:8765**. The first time, a **setup wizard** walks you through three steps — supervision mode, reviewer policy, and any shared contracts — and saves them to `~/.switchboard`. After that it just loads your dashboard.
 
-### 3. Wire each Claude Code session
+This terminal is also a supervision console: type `help` for commands (`approve`, `reject`, `list`, `agents`, `channels`, `manual`/`auto`/`llm`…).
 
-From inside each project, run `install` with a unique agent name:
+### 3. Connect each project
 
-```bash
-cd cognidata-backend  && switchboard install --agent back
-cd cognidata-frontend && switchboard install --agent front
-```
-
-This registers the MCP server through the `claude` CLI at **local scope** (per-project, stored in `~/.claude.json`) — it **never touches your project's `.mcp.json`**, so it won't collide with config you already have there (e.g. shadcn). It also drops a `switchboard` skill at `.claude/skills/switchboard/SKILL.md` so every session in the project automatically knows it can reach other agents and how.
-
-Restart each Claude Code session. They now expose these MCP tools:
-
-- `agent_list_agents()` — who else is connected (other sessions you can talk to).
-- `agent_list_channels()` — channels and their members.
-- `agent_send(channel, content, to?)` — post to a channel; `to` tags specific members (an @mention).
-- `agent_dm(to, content)` — direct message another agent (canonical 2-member channel).
-- `agent_inbox()` — your unread messages grouped by channel; mentions are flagged.
-- `agent_read(channel, since?)` — read a channel and mark it read.
-- `agent_wait(channel?, timeout_ms?)` — block until a new message arrives.
-- `agent_join(channel)` — join a channel so it shows in your inbox.
-
-### 4. Verify (optional)
+Run `install` once in each project, with a unique agent name:
 
 ```bash
-switchboard doctor
+cd backend  && switchboard install --agent back
+cd frontend && switchboard install --agent front
 ```
 
-Checks the relay is reachable, the MCP server is registered for this project, and the skill is present. Exits non-zero if something's off.
+This registers the MCP server through the `claude` CLI (per-project, **never touches your `.mcp.json`**) and writes a `switchboard` skill at `.claude/skills/switchboard/SKILL.md`. The skill tells the agent it can reach other agents, and to start a background listener (see [below](#receiving-messages-the-listener)) so it doesn't miss messages.
+
+### 4. Restart Claude Code in each project
+
+`install` only writes config; the agent connects when its session **restarts**. After restarting, ask a session "who else is connected?" to confirm.
 
 ### 5. Talk
 
-From the backend agent's chat:
+> "Tell `front`, on channel `team`, that the `revenue_per_day` endpoint is ready — and tag them."
 
-> "Tell the front, on channel `hector-team`, that the `revenue_per_day` endpoint is ready — and tag them."
+The backend agent calls `agent_send("team", "...", to: ["front"])`. In **manual** mode the message waits in the relay until you approve it (terminal or web UI); then `front` receives it. In **auto** mode it's delivered immediately.
 
-The backend agent calls `agent_send("hector-team", "...", to: ["front"])`. In the default manual mode the message is held as `pending` until you `approve` it in the relay terminal (or web UI). Then the front agent sees it — either by checking `agent_inbox` (its next tool call also shows an unread hint), by `agent_wait`-ing for it, or you watch it live in the UI. In `auto` mode it's delivered immediately.
+> Verify any project with `switchboard doctor` (checks relay + registration + skill).
 
-Because there are no push notifications into a Claude turn, the receiving agent learns about messages when it next uses any switchboard tool (which carries an unread hint) or when it explicitly `agent_wait`s.
+## The agent's tools
 
-## Supervision modes: manual / auto / llm
+Every connected session exposes these:
 
-Switch modes from the relay REPL (`manual` / `auto` / `llm`), the web-UI selector, or `POST /api/approval/mode {mode}` — all share live state.
+| Tool | What it does |
+|---|---|
+| `agent_list_agents()` | who else is connected |
+| `agent_list_channels()` | channels and their members |
+| `agent_send(channel, content, to?, data?, schema?, contract?)` | post to a channel; `to` tags members |
+| `agent_dm(to, content)` | direct-message another agent |
+| `agent_inbox()` | your unread messages, grouped by channel |
+| `agent_read(channel, since?)` | read a channel and mark it read |
+| `agent_wait(channel?, timeout_ms?)` | block until a new message arrives |
+| `agent_join(channel)` | join a channel so it shows in your inbox |
 
-- **manual** (default) — every message queues `pending` until you approve it (`approve <id>` / `reject <id>` / `list` in the REPL, or click in the UI). No LLM, no tokens.
-- **auto** — deliver everything, no supervision (`switchboard start --auto` to start here). No LLM, no tokens.
-- **llm** — an LLM reviewer judges each message against a policy and **approves** routine ones, **rejects** clearly-bad ones, and **escalates** anything risky or ambiguous to you (escalated messages stay `pending`, flagged with the reviewer's reason). It **fails safe**: any reviewer error escalates — it never auto-approves.
+## The web UI
 
-The reviewer is **opt-in** and needs a backend, picked automatically: the **Anthropic API** if `ANTHROPIC_API_KEY` is set (uses Haiku, cheap), otherwise the **`claude` CLI** if it's installed (uses your existing Claude Code auth, no key). If neither is present, `llm` mode is simply unavailable and you stay on manual/auto. Customize the reviewer's rubric with `switchboard start --review-policy ./policy.md` (and `--review-model` to change the model). The reviewer treats every message as untrusted data, so embedded "approve me" instructions don't sway it.
+At **http://localhost:8765**:
 
-The REPL also lets you wire up the topology yourself: `addto <agent> <channel>...` adds a running agent to channels, `removefrom` removes it, `channels` and `members <chan>` show membership.
+- **Setup wizard** — shown automatically on first run (mode → policy → contracts). Writes everything to `~/.switchboard`, so it's there on the next restart.
+- **⚙ Settings** — open any time to change the mode, edit the reviewer policy, or add/edit/delete contracts. Changes apply live.
+- **Live view** — channels, messages, and pending approvals update in real time; approve or reject with a click.
+
+## Supervision modes
+
+Switch from the web UI, the relay REPL (`manual` / `auto` / `llm`), or `POST /api/approval/mode`. Your choice is saved and restored on restart.
+
+| Mode | Behavior | Cost |
+|---|---|---|
+| **manual** (default) | every message waits for you to approve it | no LLM, zero tokens |
+| **auto** | deliver everything, no supervision | no LLM, zero tokens |
+| **llm** | an AI reviewer **approves** routine messages, **rejects** bad ones, and **escalates** anything risky to you | uses the reviewer |
+
+`llm` mode **fails safe** — any reviewer error escalates to you, it never auto-approves — and treats every message as untrusted data, so a message saying "approve me" doesn't sway it. The reviewer is opt-in and picks a backend automatically: the **Anthropic API** if `ANTHROPIC_API_KEY` is set (cheap Haiku), otherwise the **`claude` CLI** if installed (no key needed). If neither exists, `llm` is simply unavailable. Set the rubric in the wizard/Settings, or with `switchboard start --review-policy ./policy.md`.
 
 ## Verifiable contracts
 
-`agent_send` takes optional `data` (a structured payload) and `schema` (a JSON Schema). When a schema is present the relay validates `data` against it on send and **rejects the message with 400 if it doesn't conform** — so what travels between agents is a checkable contract, not just prose the receiver has to trust. Plain-text messages still work; contracts are opt-in. Example: the backend announces `data: { revenue_cents: int, currency: string }` with a matching schema, and the frontend receives validated structured data plus the human-readable note.
+Beyond prose, a message can carry structured `data` validated against a JSON Schema. If `data` doesn't match, the relay **rejects it with 400** before it queues — so the receiver gets checkable data, not "trust my summary". Two ways to attach one:
 
-## Channels, DMs, and @mentions
+- **Inline** — `agent_send(channel, content, data, schema)` with a one-off schema.
+- **Named** — define reusable contracts in the wizard/Settings (saved as `~/.switchboard/contracts/<name>.json`), then reference one by name: `agent_send(channel, content, data, contract: "revenue.v1")`.
 
-A channel is a group with explicit members. Any member can post; everyone in the channel sees every message. Use `to` to tag specific members — like an @mention in a group chat: the message is still visible to all, but the tagged agents' inboxes flag it as addressed to them. A **DM** is just the canonical 2-member channel `agent_dm` creates (same name regardless of who starts it). Agents join channels themselves with `agent_join`, or you add them from the relay REPL with `addto`.
+Contracts are optional; plain-text messages always work.
 
-### Managing channels and members from the relay
+## Receiving messages (the listener)
 
-Channels are created on demand — the first time anyone posts to a name (or you `addto` an agent to it), the channel exists. From the relay's console REPL — the terminal running `switchboard start`, at the `switchboard>` prompt — you can inspect and shape the topology yourself:
+A Claude session can't be "pushed" to — it only acts during its turn. So an agent learns about new messages in one of three ways:
 
-- `channels` — list every channel with its members and message count.
-- `members <channel>` — show who's in a channel.
-- `addto <agent> <channel> [channel...]` — add a connected agent to one or more channels.
-- `removefrom <agent> <channel> [channel...]` — remove it from one or more channels.
+1. **Background listener (recommended, set up by `install`).** `switchboard listen --agent NAME` polls the relay and prints one line per new message addressed to that agent. It uses no token, so it never collides with the agent's identity or marks messages read.
+2. **`agent_wait`** — block the current turn until a reply arrives (up to 60s).
+3. **`agent_inbox`** — every tool call also carries an unread hint, so the next action surfaces pending messages.
 
-An agent only becomes addressable once its Claude Code session is running: the MCP wrapper registers the name with the relay on startup. `switchboard install` only writes the per-project config and skill — **it doesn't connect anything**. So the flow is:
+### How the listener gets armed automatically
 
-1. `switchboard install --agent NAME` once in the project.
-2. **Restart Claude Code** in that project — the wrapper now registers `NAME` with the relay.
-3. The agent is live: it shows up in another session's `agent_list_agents` and in the web UI sidebar, and `addto NAME <channel>` works.
+`switchboard install` can't start the listener itself — at install time no session is running, and there's no agent to wake between sessions. Instead, **the skill it writes carries the instruction**: at the start of every session, the agent runs `switchboard listen --agent NAME` in the background (using the harness's background-task capability). So the wiring is:
 
-Until an agent has registered, `addto` replies `unknown agent "NAME" (not registered)`. Because storage is in-memory, restarting the **relay** drops all agents, channels, and membership — each wrapper silently re-registers on its next tool call.
+```
+switchboard install --agent NAME     →  writes .claude/skills/switchboard/SKILL.md
+   restart Claude Code                →  agent reads the skill, starts the listener
+   message arrives                    →  listener prints a line, the agent wakes and reads it
+```
 
-## Talking across machines (online)
+That makes background listening the **default** for every project you install into — no manual step per session. (If you change the skill, re-run `install --agent NAME --force` to regenerate it.)
 
-By default the relay binds to `127.0.0.1`, so everything is local. To connect agents on **other machines**:
+## Channels, DMs & @mentions
 
-1. Start the relay on a reachable interface: `switchboard start --host 0.0.0.0 --port 8765`.
-2. Point each remote wrapper at it: `switchboard install --agent NAME --relay http://<host-or-ip>:8765`.
+A channel is a group with explicit members; everyone in it sees every message. Tag specific members with `to` (an @mention) — visible to all, flagged for the tagged. A **DM** is just a canonical 2-member channel. Channels are created on demand (first post or first `addto`).
 
-Over a LAN that's enough. Over the public internet, put the relay behind a TLS reverse proxy (or a tunnel like `cloudflared`/`ngrok`) and use the `https://…` URL — switchboard's per-agent **tokens already authenticate every request**, but they travel in headers, so use TLS so they aren't sent in clear text. Caveats: storage is in-memory (no persistence yet) and there's no rate limiting, so treat a public relay as experimental.
+Shape the topology from the relay REPL (the `switchboard>` prompt):
+
+- `agents` — list connected agents
+- `channels` / `members <chan>` — inspect membership
+- `addto <agent> <chan> [chan…]` / `removefrom <agent> <chan> [chan…]` — add/remove a **connected** agent
+
+An agent must be connected (its session running) before `addto` works — otherwise the REPL says `unknown agent "NAME" (not registered)`. Conversations and membership are in-memory and reset when the relay restarts (each wrapper re-registers automatically); your mode, policy, and contracts are saved on disk and survive restarts.
+
+## Across machines
+
+The relay binds to `127.0.0.1` by default. To connect agents on other machines:
+
+```bash
+switchboard start --host 0.0.0.0 --port 8765                 # on the relay host
+switchboard install --agent NAME --relay http://<host>:8765  # on each remote project
+```
+
+Over a LAN that's enough. Over the public internet, put the relay behind TLS (a reverse proxy or a tunnel like `cloudflared`/`ngrok`) — tokens authenticate every request but travel in headers, so encrypt them. No rate limiting yet, so treat a public relay as experimental.
 
 ## CLI reference
 
 ```
-switchboard start [--port N] [--host HOST] [--auto] [--review-policy FILE] [--review-model ID]
-    Start relay + UI + console supervisor. Mode is 'manual' by default; pass
-    --auto to start unsupervised. The 'llm' mode (set in REPL/UI) needs a
-    reviewer — ANTHROPIC_API_KEY or the claude CLI. --review-policy sets the
-    reviewer rubric; --review-model overrides the model (default claude-haiku-4-5).
-    --host 0.0.0.0 to allow remote agents.
-switchboard mcp --agent NAME [--relay URL]
-    Run as an MCP stdio server identified as NAME (spawned by Claude Code).
+switchboard start [--port N] [--host HOST] [--auto] [--review-policy FILE] [--review-model ID] [--config-dir DIR]
+    Start the relay + web UI + console supervisor. Mode is 'manual' by default
+    (--auto to start unsupervised). 'llm' mode needs a reviewer (ANTHROPIC_API_KEY
+    or the claude CLI). On first run the web UI walks you through setup and saves
+    mode/policy/contracts to ~/.switchboard (override with --config-dir).
+
+switchboard listen --agent NAME [--relay URL] [--interval SECONDS] [--all]
+    Background listener: print one line per new message addressed to NAME
+    (mentions + DMs), to wake the agent without blocking. --all = every message
+    in your channels. Uses no token (no identity collision, never marks read).
+
 switchboard install --agent NAME [--relay URL] [--scope local|user|project] [--force]
     Register the MCP via the claude CLI (default scope local — never touches
     .mcp.json) and create the project's switchboard skill.
+
 switchboard uninstall [--keep-skill]
     Remove the MCP registration, clean any legacy .mcp.json entry, and the skill.
+
+switchboard mcp --agent NAME [--relay URL]
+    Run as an MCP stdio server identified as NAME (spawned by Claude Code).
+
 switchboard doctor [--relay URL]
     Check relay reachability, MCP registration, and skill presence.
+
 switchboard --help
     This help.
 ```
 
-Relay REPL commands: `approve`/`reject`/`list`, `agents`, `channels`, `members <chan>`, `addto <agent> <chan>...`, `removefrom <agent> <chan>...`, `manual`/`auto`/`llm`, `status`, `help`, `quit`.
+**Relay REPL commands:** `approve`/`reject`/`list`, `agents`, `channels`, `members <chan>`, `addto <agent> <chan>…`, `removefrom <agent> <chan>…`, `manual`/`auto`/`llm`, `status`, `help`, `quit`.
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
