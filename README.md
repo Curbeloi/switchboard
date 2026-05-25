@@ -100,9 +100,9 @@ Plain-text messages always work; contracts are optional.
 
 ### Receiving messages
 
-A Claude session can't be "pushed" to — it only acts during its turn. So an agent learns about new messages three ways:
+A Claude session can't be "pushed" to — it only acts during its turn, and a turn fires when the human writes, **a background task the agent launched finishes**, or a scheduled wakeup hits. So an agent reacts to messages three ways:
 
-1. **Background listener** — `switchboard listen --agent NAME` prints one line per message addressed to the agent. `install` writes a skill that auto-starts it in the background each session, so the agent wakes on new messages without blocking.
+1. **Auto-wake loop (recommended)** — the agent runs `switchboard listen --agent NAME --once` as a **background task**; it blocks until the next message addressed to it, prints it, and **exits** — and that exit wakes the agent, which reads (`agent_read`) + replies, then **relaunches** the listener. Event-driven, no polling. `install` writes a `SessionStart` hook (in `.claude/settings.local.json`) that tells the agent to arm this loop automatically each session. (Plain `switchboard listen` without `--once` runs forever as a log/monitor — it can't wake the agent.)
 2. **`agent_wait`** — block the current turn until a reply (≤ 60s).
 3. **`agent_inbox`** — every tool reply also carries an unread hint.
 

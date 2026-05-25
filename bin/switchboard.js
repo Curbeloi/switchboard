@@ -27,13 +27,15 @@ Usage:
       Run as an MCP stdio server. Registers as agent NAME against the relay.
       Defaults: --relay http://127.0.0.1:8765
 
-  switchboard listen --agent NAME [--relay URL] [--interval SECONDS] [--all]
+  switchboard listen --agent NAME [--relay URL] [--interval SECONDS] [--all] [--once]
       Background listener: poll the relay's read-only API and print one line per
-      new message addressed to NAME (mentions + DMs), so a session harness that
-      turns stdout into notifications can wake the agent without blocking its
-      turn. Uses no agent token (no identity collision, never marks messages
-      read). --all notifies on every message in your channels. Defaults:
-      --relay http://127.0.0.1:8765, --interval 10.
+      new message addressed to NAME (mentions + DMs). Uses no agent token (no
+      identity collision, never marks messages read). --all notifies on every
+      message in your channels. With --once it blocks until the next message,
+      prints it, and EXITS — so a Claude Code agent running it as a background
+      task gets woken on the exit; it then reads/replies and relaunches it
+      (event-driven auto-detection). A persisted watermark makes relaunches
+      gapless. Defaults: --relay http://127.0.0.1:8765, --interval 10.
 
   switchboard send --agent NAME (--channel NAME | --dm AGENT) [--to AGENT]...
                    [--data JSON] [--contract NAME] [--schema JSON] [CONTENT]
@@ -134,6 +136,7 @@ try {
         relay: { type: "string", default: "http://127.0.0.1:8765" },
         interval: { type: "string", default: "10" },
         all: { type: "boolean", default: false },
+        once: { type: "boolean", default: false },
       },
       strict: true,
     });
@@ -148,6 +151,7 @@ try {
       relayUrl: values.relay,
       intervalMs: Math.max(2, Number.isFinite(seconds) ? seconds : 10) * 1000,
       all: values.all,
+      once: values.once,
     });
   } else if (subcommand === "send") {
     const { values, positionals } = parseArgs({

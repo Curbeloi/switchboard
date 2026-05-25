@@ -206,7 +206,7 @@ export async function runMcp({ agent, relayUrl }) {
   }
 
   const server = new Server(
-    { name: "@icurbe/switchboard", version: "2.5.0" },
+    { name: "@icurbe/switchboard", version: "2.6.0" },
     { capabilities: { tools: {} } }
   );
 

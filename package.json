@@ -1,6 +1,6 @@
 {
   "name": "@icurbe/switchboard",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "description": "Supervised inter-agent messaging relay for Claude Code (and any MCP client). Named identities, channel-based pub/sub, single-pane supervision UI with manual-approval mode.",
   "type": "module",
   "main": "src/index.js",

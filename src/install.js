@@ -6,6 +6,8 @@ import { join } from "node:path";
 const DEFAULT_RELAY = "http://127.0.0.1:8765";
 const REPO = "https://github.com/Curbeloi/switchboard";
 const SKILL_REL = join(".claude", "skills", "switchboard");
+const SETTINGS_REL = join(".claude", "settings.local.json");
+const HOOK_MARKER = "switchboard listen"; // identifies our SessionStart hook
 
 /** Run the `claude` CLI, returning stdout. Throws with a clean message. */
 function runClaude(args) {
@@ -71,22 +73,27 @@ Repo: ${REPO}
 - \`agent_wait(channel?, timeout_ms?)\` — block until a new message arrives (long-poll).
 - \`agent_join(channel)\` — join a channel so it shows in your inbox.
 
-## Listen in the background (recommended at session start)
+## Auto-wake loop — start this at session start
 
-There are no push notifications, and \`agent_wait\` blocks your turn. To be reachable
-*without* blocking, start a background listener once at the beginning of a session
-where you might receive messages:
+There are no push notifications, and \`agent_wait\` blocks your turn. To react to
+incoming messages *without* blocking, run the **one-shot** listener as a
+**background task** at the start of the session:
 
 \`\`\`
-switchboard listen --agent ${agent}
+switchboard listen --agent ${agent} --once
 \`\`\`
 
-Run it as a **background process** using whatever background/monitoring capability
-your harness has (e.g. Claude Code's background tasks / Monitor), NOT inline. It
-polls the relay's read-only API and prints one line per new message addressed to
-you (mentions + DMs). It uses no token, so it won't collide with your identity and
-won't mark messages read. Each printed line is your cue to \`agent_read\` the channel
-and reply. When the line says a new message arrived, read it and respond.
+It blocks until the next message addressed to you arrives, prints it, and **exits**.
+Because you launched it as a background task, its exit **wakes you**. On waking:
+\`agent_read\` the channel(s) to read the real messages, reply, then **relaunch the
+same \`--once\` command** in the background to keep listening. That loop is
+event-driven auto-detection — you don't poll, you just get woken.
+
+- Launch it with your background-task capability (Claude Code: \`run_in_background\`), NOT inline.
+- The listener only TRIGGERS the wake; \`agent_read\` / \`agent_inbox\` are how you actually read.
+- No token, so no identity collision and it never marks messages read; a persisted
+  watermark means a message arriving between exit and relaunch isn't missed.
+- A \`SessionStart\` hook installed for this project reminds you to start this loop each session.
 
 ## If your switchboard tools disappear mid-session (fallback send)
 
@@ -105,11 +112,75 @@ switchboard, or restart Claude Code.
 
 ## Notes
 
-- After sending and expecting a reply: rely on the background listener above, or call \`agent_wait\`, or check \`agent_inbox\` on your next step.
+- After sending and expecting a reply: rely on the auto-wake loop above, or call \`agent_wait\`, or check \`agent_inbox\` on your next step.
 - Agent names are unique. Your name ("${agent}") is fixed for this project.
 - The human monitor (${relay}) shows every channel and holds pending messages for approval.
 - Upgraded switchboard recently? Refresh this skill with \`switchboard install --agent ${agent} --force\`.
 `;
+}
+
+async function readJsonOr(path, fallback) {
+  try {
+    return JSON.parse(await readFile(path, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+/** The SessionStart hook command: prints a hook-JSON payload whose
+ *  additionalContext nudges the agent to arm the --once auto-wake loop. The
+ *  instruction text avoids quotes so it nests cleanly inside the shell command. */
+function sessionStartHookCommand(agent) {
+  const ctx =
+    `switchboard agent ${agent}: you can message other Claude Code agents via switchboard. ` +
+    `Start your background listener now — run (with run_in_background): switchboard listen --agent ${agent} --once . ` +
+    `It exits when a message arrives, which wakes you: then agent_read the channel and reply, and relaunch the same command to keep listening. ` +
+    `See the switchboard skill for details.`;
+  const payload = JSON.stringify({
+    hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: ctx },
+  });
+  return `printf '%s' '${payload}'`;
+}
+
+/** Merge our SessionStart hook into <cwd>/.claude/settings.local.json (local,
+ *  gitignored), preserving any existing settings/hooks. Idempotent: always
+ *  leaves exactly one switchboard hook (refreshes the agent name on re-run). */
+export async function ensureSessionStartHook({ agent, cwd }) {
+  const path = join(cwd, SETTINGS_REL);
+  const settings = (await readJsonOr(path, null)) ?? {};
+  settings.hooks ??= {};
+  const arr = Array.isArray(settings.hooks.SessionStart) ? settings.hooks.SessionStart : [];
+  const others = arr.filter(
+    (entry) =>
+      !(Array.isArray(entry?.hooks) ? entry.hooks : []).some(
+        (h) => typeof h?.command === "string" && h.command.includes(HOOK_MARKER)
+      )
+  );
+  others.push({ hooks: [{ type: "command", command: sessionStartHookCommand(agent) }] });
+  settings.hooks.SessionStart = others;
+  await mkdir(join(cwd, ".claude"), { recursive: true });
+  await writeFile(path, JSON.stringify(settings, null, 2) + "\n", "utf8");
+  return path;
+}
+
+/** Remove our SessionStart hook, leaving any other settings/hooks intact. */
+export async function removeSessionStartHook(cwd) {
+  const path = join(cwd, SETTINGS_REL);
+  const settings = await readJsonOr(path, null);
+  const arr = settings?.hooks?.SessionStart;
+  if (!Array.isArray(arr)) return;
+  const others = arr.filter(
+    (entry) =>
+      !(Array.isArray(entry?.hooks) ? entry.hooks : []).some(
+        (h) => typeof h?.command === "string" && h.command.includes(HOOK_MARKER)
+      )
+  );
+  if (others.length === arr.length) return; // ours wasn't there
+  if (others.length) settings.hooks.SessionStart = others;
+  else delete settings.hooks.SessionStart;
+  if (settings.hooks && Object.keys(settings.hooks).length === 0) delete settings.hooks;
+  await writeFile(path, JSON.stringify(settings, null, 2) + "\n", "utf8");
+  process.stdout.write(`removed switchboard SessionStart hook from ${path}\n`);
 }
 
 /** Create the project skill if missing (idempotent). With force, overwrite (e.g. on lib update). */
@@ -153,6 +224,7 @@ export async function installMcp({
   }
 
   const skill = await ensureSkill({ agent, relay, cwd, force });
+  const hookPath = await ensureSessionStartHook({ agent, cwd });
 
   process.stdout.write(
     `registered switchboard MCP via claude (scope: ${scope}, agent: ${agent}, relay: ${relay})\n`
@@ -161,6 +233,7 @@ export async function installMcp({
   process.stdout.write(
     skill.created ? `created skill ${skill.file}\n` : `skill already present (${skill.file})\n`
   );
+  process.stdout.write(`wrote SessionStart hook → ${hookPath} (auto-arms the --once listener each session)\n`);
   process.stdout.write(`restart Claude Code in this project to pick up the change.\n`);
 }
 
@@ -193,6 +266,7 @@ export async function uninstallMcp({ cwd = process.cwd(), keepSkill = false } = 
     }
   }
   await cleanLegacyMcpJson(cwd);
+  await removeSessionStartHook(cwd);
   if (!keepSkill) {
     const dir = join(cwd, SKILL_REL);
     if (await fileExists(dir)) {
