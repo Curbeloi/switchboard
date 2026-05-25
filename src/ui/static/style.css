@@ -115,6 +115,43 @@ aside li {
   font-variant-numeric: tabular-nums;
 }
 
+.channel-item .ch-del {
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 2px;
+  visibility: hidden;
+}
+.channel-item:hover .ch-del { visibility: visible; }
+.channel-item .ch-del:hover { color: var(--bad); }
+.channel-item.active .ch-del { color: var(--bg); visibility: visible; }
+
+.new-channel { display: flex; gap: 6px; margin-top: 8px; }
+.new-channel input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.new-channel button {
+  background: var(--border);
+  color: var(--text);
+  border: 0;
+  border-radius: 5px;
+  padding: 0 10px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.new-channel button:hover { background: var(--accent); color: var(--bg); }
+
 #feed {
   padding: 16px 20px;
   overflow-y: auto;

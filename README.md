@@ -147,7 +147,10 @@ Shape the topology from the relay REPL (the `switchboard>` prompt):
 
 - `agents` — list connected agents
 - `channels` / `members <chan>` — inspect membership
+- `createchan <name>` / `delchan <name>` — create an empty channel / delete a whole channel
 - `addto <agent> <chan> [chan…]` / `removefrom <agent> <chan> [chan…]` — add/remove a **connected** agent
+
+In the web UI you can also create a channel (the "new channel" box in the sidebar) and delete one (the ✕ on a channel row).
 
 An agent must be connected (its session running) before `addto` works — otherwise the REPL says `unknown agent "NAME" (not registered)`. Conversations and membership are in-memory and reset when the relay restarts (each wrapper re-registers automatically); your mode, policy, and contracts are saved on disk and survive restarts.
 
@@ -193,7 +196,7 @@ switchboard --help
     This help.
 ```
 
-**Relay REPL commands:** `approve`/`reject`/`list`, `agents`, `channels`, `members <chan>`, `addto <agent> <chan>…`, `removefrom <agent> <chan>…`, `manual`/`auto`/`llm`, `status`, `help`, `quit`.
+**Relay REPL commands:** `approve`/`reject`/`list`, `agents`, `channels`, `members <chan>`, `createchan <name>`, `delchan <name>`, `addto <agent> <chan>…`, `removefrom <agent> <chan>…`, `manual`/`auto`/`llm`, `status`, `help`, `quit`.
 
 ## License
 

@@ -81,6 +81,26 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
   /* Channels */
   api.get("/channels", (_req, res) => res.json(store.listChannels()));
 
+  /* Create / delete a whole channel (human supervisor — no agent token). */
+  api.post("/channels", (req, res) => {
+    const { name } = req.body ?? {};
+    if (!name || typeof name !== "string") {
+      return res.status(400).json({ error: "name required (string)" });
+    }
+    const channel = store.createChannel(name);
+    broadcast({ type: "channel.updated", channel });
+    res.json(channel);
+  });
+
+  api.delete("/channels/:channel", (req, res) => {
+    const name = req.params.channel;
+    if (!store.deleteChannel(name)) {
+      return res.status(404).json({ error: "channel not found" });
+    }
+    broadcast({ type: "channel.deleted", name });
+    res.json({ ok: true });
+  });
+
   api.post("/channels/:channel/join", (req, res) => {
     const agent = requireAgent(req, res);
     if (!agent) return;

@@ -9,6 +9,8 @@ const HELP = `commands:
   members <chan>   show the members of a channel
   addto <agent> <chan> [chan...]      add an agent to one or more channels
   removefrom <agent> <chan> [chan...] remove an agent from one or more channels
+  createchan <name>   create an empty channel
+  delchan <name>      delete a channel (and its messages)
   manual           supervision mode: every message waits for your approval (default)
   auto             supervision mode: deliver everything, no supervision
   llm              supervision mode: an LLM reviewer approves/rejects/escalates (needs a reviewer)
@@ -230,6 +232,33 @@ export function startConsoleSupervisor({ store, broadcast, reviewer = null, conf
           if (result) broadcast({ type: "channel.updated", channel: result });
         }
         process.stdout.write(`removed "${agentName}" from: ${chans.join(", ")}\n`);
+        return;
+      }
+
+      case "createchan": {
+        const name = args[0];
+        if (!name) {
+          process.stdout.write("usage: createchan <name>\n");
+          return;
+        }
+        const result = store.createChannel(name);
+        broadcast({ type: "channel.updated", channel: result });
+        process.stdout.write(`created channel "${name}"\n`);
+        return;
+      }
+
+      case "delchan": {
+        const name = args[0];
+        if (!name) {
+          process.stdout.write("usage: delchan <name>\n");
+          return;
+        }
+        if (!store.deleteChannel(name)) {
+          process.stdout.write(`no such channel "${name}"\n`);
+          return;
+        }
+        broadcast({ type: "channel.deleted", name });
+        process.stdout.write(`deleted channel "${name}"\n`);
         return;
       }
 

@@ -12,6 +12,8 @@
   const emptyHint = document.getElementById("empty-hint");
   const overlay = document.getElementById("overlay");
   const settingsBtn = document.getElementById("settings-btn");
+  const newChannelName = document.getElementById("new-channel-name");
+  const newChannelBtn = document.getElementById("new-channel-btn");
 
   let reviewerAvailable = false;
   let defaultPolicy = "";
@@ -66,6 +68,15 @@
         <span class="ch-badge">${count}</span>`;
       li.title = `members: ${(info.members || []).join(", ") || "(none)"}`;
       li.onclick = () => selectChannel(name);
+      const del = document.createElement("button");
+      del.className = "ch-del";
+      del.textContent = "✕";
+      del.title = "delete channel";
+      del.onclick = (ev) => {
+        ev.stopPropagation(); // don't also select the channel
+        deleteChannel(name);
+      };
+      li.appendChild(del);
       channelsList.appendChild(li);
     }
   }
@@ -195,6 +206,33 @@
     await fetch(path, { method: "POST" });
   }
 
+  /* ---------- channel create / delete ---------- */
+
+  async function createChannel(name) {
+    const n = (name || "").trim();
+    if (!n) return;
+    const res = await fetch("/api/channels", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: n }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      alert(body.error || "could not create channel");
+    }
+    // The channel.updated broadcast re-renders the list — no optimistic add.
+  }
+
+  async function deleteChannel(name) {
+    if (!confirm(`Delete channel "${name}"? Its messages and pending items are lost.`)) return;
+    const res = await fetch(`/api/channels/${encodeURIComponent(name)}`, { method: "DELETE" });
+    if (!res.ok && res.status !== 404) {
+      const body = await res.json().catch(() => ({}));
+      alert(body.error || "could not delete channel");
+    }
+    // The channel.deleted broadcast removes it locally and resets the feed.
+  }
+
   /* ---------- websocket ---------- */
 
   function connect() {
@@ -231,6 +269,16 @@
         if (typeof e.channel.messageCount === "number") info.messageCount = e.channel.messageCount;
         renderChannels();
         if (e.channel.name === selected) renderChannelMeta();
+        break;
+      }
+      case "channel.deleted": {
+        channels.delete(e.name);
+        messagesByChannel.delete(e.name);
+        readsByChannel.delete(e.name);
+        for (const [id, m] of pending) if (m.channel === e.name) pending.delete(id);
+        if (selected === e.name) selected = null;
+        renderChannels();
+        if (selected === null) renderFeed();
         break;
       }
       case "message.delivered": {
@@ -595,6 +643,15 @@
   }
 
   settingsBtn.addEventListener("click", refreshSettings);
+
+  async function submitNewChannel() {
+    await createChannel(newChannelName.value);
+    newChannelName.value = "";
+  }
+  newChannelBtn.addEventListener("click", submitNewChannel);
+  newChannelName.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") submitNewChannel();
+  });
 
   /* ---------- init ---------- */
 

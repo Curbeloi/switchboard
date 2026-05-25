@@ -158,6 +158,30 @@ export function createStore() {
     dmChannelName(a, b) {
       return "dm:" + [a, b].sort().join("+");
     },
+    /** Explicitly create an empty channel (idempotent — an existing channel is
+     *  returned untouched). Human-supervisor action; agents create implicitly. */
+    createChannel(name) {
+      const ch = getChannel(name, true);
+      return { name: ch.name, members: [...ch.members], messageCount: ch.messages.length };
+    },
+    /** Delete a whole channel and clean up anything keyed on it: pending
+     *  messages, per-agent read cursors, and channel-bound waiters (resolved
+     *  empty so their long-polls don't leak). Returns false if it didn't exist. */
+    deleteChannel(name) {
+      if (!channels.has(name)) return false;
+      channels.delete(name);
+      for (const [id, msg] of pending) {
+        if (msg.channel === name) pending.delete(id);
+      }
+      for (const cursors of readCursors.values()) cursors.delete(name);
+      for (const w of [...waiters]) {
+        if (w.channel !== name) continue;
+        clearTimeout(w.timer);
+        waiters.delete(w);
+        w.resolve([]);
+      }
+      return true;
+    },
 
     /* messages */
     postMessage({ channel, from, content, to = [], data = null, schema = null, contract = null }) {
