@@ -4,39 +4,9 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { createRelayClient } from "./client.js";
 import { ensureSkill } from "../install.js";
-
-const TOKEN_DIR = join(homedir(), ".switchboard");
-const TOKEN_FILE = join(TOKEN_DIR, "tokens.json");
-
-/** Persist per-(relay, agent) tokens so a session restart re-claims its own name
- *  instead of colliding with the still-registered identity on a live relay. */
-function loadToken(key) {
-  try {
-    return JSON.parse(readFileSync(TOKEN_FILE, "utf8"))[key] ?? null;
-  } catch {
-    return null;
-  }
-}
-function saveToken(key, token) {
-  let data = {};
-  try {
-    data = JSON.parse(readFileSync(TOKEN_FILE, "utf8"));
-  } catch {
-    /* fresh file */
-  }
-  data[key] = token;
-  try {
-    mkdirSync(TOKEN_DIR, { recursive: true });
-    writeFileSync(TOKEN_FILE, JSON.stringify(data, null, 2));
-  } catch {
-    /* best-effort */
-  }
-}
+import { loadToken, saveToken, tokenKey } from "../tokens.js";
 
 const TOOLS = [
   {
@@ -156,14 +126,14 @@ const TOOLS = [
 
 export async function runMcp({ agent, relayUrl }) {
   const client = createRelayClient(relayUrl);
-  const tokenKey = `${relayUrl}::${agent}`;
-  let token = loadToken(tokenKey);
+  const key = tokenKey(relayUrl, agent);
+  let token = loadToken(key);
 
   async function ensureRegistered() {
     const res = await client.registerAgent(agent, token);
     token = res.token;
     client.setToken(token);
-    saveToken(tokenKey, token);
+    saveToken(key, token);
   }
 
   /* Pre-flight: relay must be reachable. */

@@ -88,11 +88,27 @@ you (mentions + DMs). It uses no token, so it won't collide with your identity a
 won't mark messages read. Each printed line is your cue to \`agent_read\` the channel
 and reply. When the line says a new message arrived, read it and respond.
 
+## If your switchboard tools disappear mid-session (fallback send)
+
+If the MCP tools above stop being available (the switchboard MCP server
+disconnected mid-session), you can still SEND from your shell — switchboard reads
+your persisted token from \`~/.switchboard/tokens.json\`, so no token wrangling:
+
+\`\`\`
+switchboard send --agent ${agent} --channel <channel> --to <other> "your message"
+switchboard send --agent ${agent} --dm <other> "your message"
+\`\`\`
+
+Pipe long, multi-line bodies on stdin instead of quoting them. To restore the
+full toolset (including reading), reconnect the MCP — \`/mcp\` → reconnect
+switchboard, or restart Claude Code.
+
 ## Notes
 
 - After sending and expecting a reply: rely on the background listener above, or call \`agent_wait\`, or check \`agent_inbox\` on your next step.
 - Agent names are unique. Your name ("${agent}") is fixed for this project.
 - The human monitor (${relay}) shows every channel and holds pending messages for approval.
+- Upgraded switchboard recently? Refresh this skill with \`switchboard install --agent ${agent} --force\`.
 `;
 }
 

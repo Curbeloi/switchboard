@@ -6,6 +6,7 @@ import { startConsoleSupervisor } from "../src/relay/supervisor.js";
 import { runMcp } from "../src/mcp/server.js";
 import { installMcp, uninstallMcp, doctor } from "../src/install.js";
 import { runListen } from "../src/listen.js";
+import { runSend } from "../src/send.js";
 
 const HELP = `switchboard — supervised inter-agent messaging relay
 
@@ -33,6 +34,16 @@ Usage:
       turn. Uses no agent token (no identity collision, never marks messages
       read). --all notifies on every message in your channels. Defaults:
       --relay http://127.0.0.1:8765, --interval 10.
+
+  switchboard send --agent NAME (--channel NAME | --dm AGENT) [--to AGENT]...
+                   [--data JSON] [--contract NAME] [--schema JSON] [CONTENT]
+      Send ONE message without the MCP server — a fallback for when an agent's
+      MCP tools are unavailable mid-session (the stdio server dropped). Reads the
+      agent's persisted token from ~/.switchboard/tokens.json and POSTs to the
+      relay; mirrors the agent_send/agent_dm tools. CONTENT is the message body
+      (positional) or piped on stdin (handy for long, multi-line bodies). Use
+      --channel for a named channel (with optional --to @mentions) or --dm for a
+      1:1. Defaults: --relay http://127.0.0.1:8765
 
   switchboard install --agent NAME [--relay URL] [--scope SCOPE] [--force]
       Register the switchboard MCP server for this project via the claude CLI
@@ -137,6 +148,49 @@ try {
       relayUrl: values.relay,
       intervalMs: Math.max(2, Number.isFinite(seconds) ? seconds : 10) * 1000,
       all: values.all,
+    });
+  } else if (subcommand === "send") {
+    const { values, positionals } = parseArgs({
+      args: rest,
+      options: {
+        agent: { type: "string" },
+        relay: { type: "string", default: "http://127.0.0.1:8765" },
+        channel: { type: "string" },
+        dm: { type: "string" },
+        to: { type: "string", multiple: true },
+        data: { type: "string" },
+        contract: { type: "string" },
+        schema: { type: "string" },
+      },
+      allowPositionals: true,
+      strict: true,
+    });
+    if (!values.agent) {
+      process.stderr.write("error: --agent NAME is required\n\n");
+      help();
+      process.exit(2);
+    }
+    const to = (values.to ?? [])
+      .flatMap((s) => s.split(","))
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const parseJson = (s, flag) => {
+      try {
+        return JSON.parse(s);
+      } catch {
+        throw new Error(`invalid --${flag} JSON`);
+      }
+    };
+    await runSend({
+      agent: values.agent,
+      relayUrl: values.relay,
+      channel: values.channel ?? null,
+      dm: values.dm ?? null,
+      to,
+      content: positionals.length ? positionals.join(" ") : undefined,
+      data: values.data ? parseJson(values.data, "data") : null,
+      contract: values.contract ?? null,
+      schema: values.schema ? parseJson(values.schema, "schema") : null,
     });
   } else if (subcommand === "install") {
     const { values } = parseArgs({
