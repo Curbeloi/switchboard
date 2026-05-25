@@ -6,3 +6,7 @@ dist/
 data/
 *.sqlite
 *.sqlite-journal
+
+# Claude Code dev artifacts (kept locally, not committed/published)
+CLAUDE.md
+.claude/
