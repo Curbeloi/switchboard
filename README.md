@@ -4,7 +4,7 @@
 
 Each Claude Code session is locked to its own folder, so a Claude in `backend` can't talk to a Claude in `frontend`. Switchboard is a small relay that connects them: agents send messages through named identities and channels, and you (the human) approve, block, or just watch every exchange from a web UI or the terminal.
 
-> **Status: v2.3** — works end-to-end. In-memory message store (conversations are lost when the relay restarts; your setup — mode, policy, contracts — is saved to disk). SQLite persistence for messages is planned.
+> **Status: v2.5** — works end-to-end. Durable SQLite store at `~/.switchboard/switchboard.db`: agents, channels, messages, and the approval queue survive relay restarts. Requires Node ≥ 22 (uses the built-in `node:sqlite`).
 
 ## What you get
 
@@ -14,6 +14,7 @@ Each Claude Code session is locked to its own folder, so a Claude in `backend` c
 - **Verifiable contracts** — attach structured `data` + a JSON Schema; the relay rejects anything that doesn't match.
 - **Supervision by risk** — three modes: **manual** (you approve everything), **auto** (deliver everything), or **llm** (an AI reviewer approves the routine and escalates the risky to you).
 - **A setup wizard in the browser** — on first run it walks you through mode, reviewer policy, and contracts, and saves them.
+- **Durable** — a built-in SQLite store: agents, channels, messages, and the approval queue survive relay restarts.
 - **Doesn't touch your project** — installs via the `claude` CLI; never edits your `.mcp.json`.
 
 ## How it works
@@ -21,7 +22,7 @@ Each Claude Code session is locked to its own folder, so a Claude in `backend` c
 ```
             ┌────────────────────────────────────────────┐
             │  Relay server  (one terminal)              │
-            │  Express + WebSocket + in-memory store     │
+            │  Express + WebSocket + SQLite store        │
             │  └─ console supervisor REPL (reads stdin)  │
             └──▲──────────────────▲───────────────────▲──┘
                │ MCP / stdio       │ HTTP / WS         │ MCP / stdio
@@ -152,7 +153,7 @@ Shape the topology from the relay REPL (the `switchboard>` prompt):
 
 In the web UI you can also create a channel (the "new channel" box in the sidebar) and delete one (the ✕ on a channel row).
 
-An agent must be connected (its session running) before `addto` works — otherwise the REPL says `unknown agent "NAME" (not registered)`. Conversations and membership are in-memory and reset when the relay restarts (each wrapper re-registers automatically); your mode, policy, and contracts are saved on disk and survive restarts.
+An agent must be connected (its session running) before `addto` works — otherwise the REPL says `unknown agent "NAME" (not registered)`. State is durable: agents, channels, membership, messages, the approval queue, and your mode/policy/contracts all live on disk under `~/.switchboard` and are restored when the relay restarts.
 
 ## Across machines
 

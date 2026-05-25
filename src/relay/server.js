@@ -20,7 +20,7 @@ export async function startRelay({
   configDir,
 } = {}) {
   const config = createConfigStore(configDir);
-  const store = createStore();
+  const store = createStore({ dbPath: join(config.dir, "switchboard.db") });
   // Restore persisted state written by the setup wizard / edit UI.
   const saved = config.readConfig();
   if (saved.mode) {

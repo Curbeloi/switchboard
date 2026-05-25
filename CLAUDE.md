@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Run / build / test
 
-Plain Node ESM (`"type": "module"`), no bundler, no TypeScript. Node ≥ 20.
+Plain Node ESM (`"type": "module"`), no bundler, no TypeScript. Node ≥ 22 (the store uses the built-in `node:sqlite`).
 
 - `npm start` — start the relay on `127.0.0.1:8765` (alias for `node bin/switchboard.js start`).
 - `npm run dev` — same, with `node --watch`.
@@ -23,7 +23,7 @@ Dogfood from this checkout: `npm link` once so the global `switchboard` resolves
 
 Two halves of a single package, separated by a network boundary:
 
-- **Relay side** (`src/relay/`) — the daemon. `server.js` mounts Express on the same `http.Server` as a `ws.WebSocketServer` (path `/subscribe`) and serves `src/ui/static/` at `/`. REST endpoints live in `routes/index.js` under `/api`. The data layer is `store.js`, an in-memory closure-based factory (the SQLite-swap seam — don't leak its internals into routes). `supervisor.js` is the in-process console REPL; it `subscribe()`s to broadcast events and shares the relay's stdout, and skips itself when stdin isn't a TTY.
+- **Relay side** (`src/relay/`) — the daemon. `server.js` mounts Express on the same `http.Server` as a `ws.WebSocketServer` (path `/subscribe`) and serves `src/ui/static/` at `/`. REST endpoints live in `routes/index.js` under `/api`. The data layer is `store.js`, a `node:sqlite`-backed closure factory at `<configDir>/switchboard.db` (don't leak its SQL/internals into routes — keep the documented-method seam). `supervisor.js` is the in-process console REPL; it `subscribe()`s to broadcast events and shares the relay's stdout, and skips itself when stdin isn't a TTY.
 
 - **MCP side** (`src/mcp/`) — the per-session wrapper. `server.js` exposes eight tools (`agent_send`, `agent_dm`, `agent_read`, `agent_inbox`, `agent_wait`, `agent_join`, `agent_list_channels`, `agent_list_agents`) over stdio. On startup it does `/api/health`, registers (obtaining a token), ensures the project skill exists, and exits non-zero if the relay is unreachable or the name is taken. All HTTP goes through `client.js` (`createRelayClient(url, token)`), the only place that knows the relay URL/auth shape.
 
@@ -68,7 +68,7 @@ Verifiable contracts: `agent_send` accepts optional `data` plus either an inline
 - **Routes use only the store's documented methods** — keeps the SQLite swap clean.
 - **Broadcasts are fire-and-forget**, fanned out to WS subscribers (UI) and in-process `subscribe(fn)` listeners (the supervisor). Waiter resolution lives inside the store (`notifyWaiters`), not in routes.
 - **Install never writes the project `.mcp.json`.** It uses `claude mcp add --scope local`. The only project files switchboard writes are under `.claude/skills/switchboard/`.
-- **Message store is in-memory; config is on disk.** Agents, channels, messages, cursors, and tokens are in-memory and lost on relay restart (wrappers re-register on next call via the 401-retry path). The supervision **mode**, reviewer **policy**, and named **contracts** persist to `~/.switchboard` via `config.js` and are restored on boot.
+- **Everything persists.** Agents (+tokens), channels, membership, messages (incl. pending), and read cursors live in `<configDir>/switchboard.db` (`node:sqlite`, WAL) and survive relay restarts. The supervision **mode**, reviewer **policy**, and named **contracts** persist separately as files under `~/.switchboard` via `config.js`. Only live `agent_wait` waiters are in-memory (transient by nature). The `mode` value is held in-memory in the store but restored from `config.js` on boot.
 
 ## Where to make common changes
 
@@ -77,4 +77,4 @@ Verifiable contracts: `agent_send` accepts optional `data` plus either an inline
 - New broadcast event → emit from a route (or the store), then handle it in `app.js`'s `handle()` switch.
 - New supervisor command → `HELP` + the `handle()` switch in `src/relay/supervisor.js`.
 - New persisted config (contracts/policy/mode/setup) → add IO to `src/relay/config.js`, expose it via routes (`/api/setup`, `/api/contracts`, `/api/policy`), and wire the wizard/Settings in `app.js`.
-- Swapping the store for SQLite → reimplement `createStore()` in `src/relay/store.js` with the same return shape.
+- Changing persistence/schema → `createStore()` in `src/relay/store.js` is `node:sqlite`-backed (tables created on boot with `CREATE TABLE IF NOT EXISTS`); keep the same return shape so routes/MCP stay untouched. Complex message fields (`to`, `data`, `schema`, `review`) are stored as JSON text columns.

@@ -1,6 +1,6 @@
 {
   "name": "@icurbe/switchboard",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "Supervised inter-agent messaging relay for Claude Code (and any MCP client). Named identities, channel-based pub/sub, single-pane supervision UI with manual-approval mode.",
   "type": "module",
   "main": "src/index.js",
@@ -39,7 +39,7 @@
   },
   "homepage": "https://github.com/Curbeloi/switchboard#readme",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.97.1",
