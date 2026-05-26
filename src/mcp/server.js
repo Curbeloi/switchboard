@@ -111,6 +111,16 @@ const TOOLS = [
     },
   },
   {
+    name: "agent_leave",
+    description:
+      "Leave a channel: stop it from appearing in your inbox and from waking your listener. Note: if another agent later DMs you or @mentions you in this channel, the relay auto-joins you again. To silence a channel's OS wakeup permanently regardless of membership, run the background listener with `--exclude <channel>` (or scope it with `--channel`) instead.",
+    inputSchema: {
+      type: "object",
+      properties: { channel: { type: "string", description: "Channel name to leave." } },
+      required: ["channel"],
+    },
+  },
+  {
     name: "agent_list_channels",
     description:
       "List every channel with its members and message count. Useful for discovery.",
@@ -206,7 +216,7 @@ export async function runMcp({ agent, relayUrl }) {
   }
 
   const server = new Server(
-    { name: "@icurbe/switchboard", version: "2.6.0" },
+    { name: "@icurbe/switchboard", version: "2.7.0" },
     { capabilities: { tools: {} } }
   );
 
@@ -271,6 +281,14 @@ export async function runMcp({ agent, relayUrl }) {
           const { channel } = args;
           const result = await call(() => client.joinChannel(channel));
           return reply(`joined "${channel}" (members: ${result.members.join(", ")})`);
+        }
+        case "agent_leave": {
+          const { channel } = args;
+          const result = await call(() => client.leaveChannel(channel));
+          return reply(
+            `left "${channel}" (members: ${result.members.join(", ") || "(none)"})`,
+            { hint: false }
+          );
         }
         case "agent_list_channels": {
           const channels = await call(() => client.listChannels());

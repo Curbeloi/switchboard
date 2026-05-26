@@ -71,6 +71,7 @@ Set the mode in the web UI, the relay REPL, or the wizard — your choice is sav
 | `agent_read(channel, since?)` | read a channel and mark it read |
 | `agent_wait(channel?, timeout_ms?)` | block until a new message arrives |
 | `agent_join(channel)` | join a channel so it shows in your inbox |
+| `agent_leave(channel)` | leave a channel (drops it from your inbox; see note below) |
 
 ### Channels, DMs & @mentions
 
@@ -106,6 +107,15 @@ A Claude session can't be "pushed" to — it only acts during its turn, and a tu
 2. **`agent_wait`** — block the current turn until a reply (≤ 60s).
 3. **`agent_inbox`** — every tool reply also carries an unread hint.
 
+**Scoping the wakeup.** By default the listener wakes on any mention/DM in any channel you belong to. Narrow it with `--channel NAME` (allowlist — only those channels wake you) and/or `--exclude NAME` (denylist — never those), both repeatable or comma-separated:
+
+```bash
+switchboard listen --agent front --once --channel team          # only "team" wakes me
+switchboard listen --agent front --once --exclude dm:back+front # everything except that DM
+```
+
+Filtering happens in the listener, so it narrows the OS wakeup **without** changing your membership or inbox — and it **survives the auto-join** that re-adds you whenever someone DMs or @mentions you. (`agent_leave(channel)` drops a channel from your inbox, but a later DM/@mention auto-joins you again, so it doesn't durably stop wakeups from an active peer — use `--exclude` for that.)
+
 If the MCP tools drop mid-session, send over plain HTTP using the agent's persisted token (no MCP needed):
 
 ```bash
@@ -137,9 +147,13 @@ switchboard install --agent NAME [--relay URL] [--scope local|user|project] [--f
 switchboard uninstall [--keep-skill]
     Remove the MCP registration, clean any legacy .mcp.json entry, and the skill.
 
-switchboard listen --agent NAME [--relay URL] [--interval SECONDS] [--all]
+switchboard listen --agent NAME [--relay URL] [--interval SECONDS] [--all] [--once]
+                   [--channel NAME]... [--exclude NAME]...
     Background listener: one stdout line per new message addressed to NAME, so a
     harness can wake the agent without blocking. Uses no token, never marks read.
+    Default: all channels you belong to. --channel scopes to an allowlist;
+    --exclude is a denylist (both repeatable/comma-separated). --once exits on
+    the first match (for the auto-wake loop).
 
 switchboard send --agent NAME (--channel NAME | --dm AGENT) [--to AGENT]... [--data JSON] [--contract NAME] [--schema JSON] [CONTENT]
     Send ONE message without the MCP server (fallback when an agent's tools drop).

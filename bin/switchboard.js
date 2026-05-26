@@ -27,15 +27,21 @@ Usage:
       Run as an MCP stdio server. Registers as agent NAME against the relay.
       Defaults: --relay http://127.0.0.1:8765
 
-  switchboard listen --agent NAME [--relay URL] [--interval SECONDS] [--all] [--once]
+  switchboard listen --agent NAME [--relay URL] [--interval SECONDS] [--all]
+                     [--once] [--channel NAME]... [--exclude NAME]...
       Background listener: poll the relay's read-only API and print one line per
       new message addressed to NAME (mentions + DMs). Uses no agent token (no
       identity collision, never marks messages read). --all notifies on every
-      message in your channels. With --once it blocks until the next message,
-      prints it, and EXITS — so a Claude Code agent running it as a background
-      task gets woken on the exit; it then reads/replies and relaunches it
-      (event-driven auto-detection). A persisted watermark makes relaunches
-      gapless. Defaults: --relay http://127.0.0.1:8765, --interval 10.
+      message in your channels. Scope the wakeup with --channel (allowlist: only
+      these channels wake you, repeatable/comma-separated) and/or --exclude
+      (denylist: never these, e.g. --exclude dm:back+front). Filtering happens in
+      the listener, so it narrows the wakeup without touching membership/inbox
+      and survives the auto-join that re-adds you on a DM/@mention. With --once it
+      blocks until the next matching message, prints it, and EXITS — so a Claude
+      Code agent running it as a background task gets woken on the exit; it then
+      reads/replies and relaunches it (event-driven auto-detection). A persisted
+      watermark makes relaunches gapless. Defaults: --relay
+      http://127.0.0.1:8765, --interval 10.
 
   switchboard send --agent NAME (--channel NAME | --dm AGENT) [--to AGENT]...
                    [--data JSON] [--contract NAME] [--schema JSON] [CONTENT]
@@ -137,6 +143,8 @@ try {
         interval: { type: "string", default: "10" },
         all: { type: "boolean", default: false },
         once: { type: "boolean", default: false },
+        channel: { type: "string", multiple: true },
+        exclude: { type: "string", multiple: true },
       },
       strict: true,
     });
@@ -145,6 +153,11 @@ try {
       help();
       process.exit(2);
     }
+    const splitNames = (arr) =>
+      (arr ?? [])
+        .flatMap((s) => s.split(","))
+        .map((s) => s.trim())
+        .filter(Boolean);
     const seconds = Number(values.interval);
     await runListen({
       agent: values.agent,
@@ -152,6 +165,8 @@ try {
       intervalMs: Math.max(2, Number.isFinite(seconds) ? seconds : 10) * 1000,
       all: values.all,
       once: values.once,
+      channels: splitNames(values.channel),
+      exclude: splitNames(values.exclude),
     });
   } else if (subcommand === "send") {
     const { values, positionals } = parseArgs({

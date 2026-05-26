@@ -50,18 +50,32 @@ export async function runListen({
   intervalMs = 10000,
   all = false,
   once = false,
+  channels = [],
+  exclude = [],
 } = {}) {
   if (!agent) throw new Error("--agent NAME is required");
   const base = relayUrl.replace(/\/+$/, "");
+
+  // Channel scoping: an allowlist (only these wake you) and/or a denylist
+  // (never these). Applied in poll() after the membership check, so it narrows
+  // the wakeup WITHOUT touching membership/inbox — and survives the auto-join
+  // that re-adds you when someone DMs/@mentions you.
+  const allow = new Set(channels);
+  const deny = new Set(exclude);
 
   // once: resume from the persisted watermark (gapless). Otherwise seed to now.
   let since = once ? loadWatermark(agent, base) ?? Date.now() : Date.now();
   if (once) saveWatermark(agent, base, since);
 
+  const scope = all
+    ? "all messages in your channels"
+    : "messages addressed to you (mentions + DMs)";
+  const filt = allow.size ? ` only in {${[...allow].join(", ")}}` : "";
+  const excl = deny.size ? ` excluding {${[...deny].join(", ")}}` : "";
   process.stderr.write(
     `switchboard listen: agent="${agent}" relay=${base}, every ${Math.round(intervalMs / 1000)}s` +
       `${once ? " (--once: exit on first message)" : ""} — ` +
-      `${all ? "all messages in your channels" : "messages addressed to you (mentions + DMs)"}\n`
+      `${scope}${filt}${excl}\n`
   );
 
   async function getJson(path) {
@@ -71,12 +85,14 @@ export async function runListen({
   }
 
   async function poll() {
-    const channels = await getJson("/api/channels");
+    const apiChannels = await getJson("/api/channels");
     let maxSeen = since;
     const hits = [];
-    for (const ch of channels) {
+    for (const ch of apiChannels) {
       const members = Array.isArray(ch.members) ? ch.members : [];
       if (!members.includes(agent)) continue; // only channels we belong to
+      if (allow.size && !allow.has(ch.name)) continue; // allowlist: only these
+      if (deny.has(ch.name)) continue; // denylist: never these
       const isMyDm = ch.name.startsWith("dm:");
       const msgs = await getJson(
         `/api/channels/${encodeURIComponent(ch.name)}/messages?since=${since}`

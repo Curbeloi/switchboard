@@ -72,6 +72,7 @@ Repo: ${REPO}
 - \`agent_read(channel, since?)\` — read a channel and mark it read.
 - \`agent_wait(channel?, timeout_ms?)\` — block until a new message arrives (long-poll).
 - \`agent_join(channel)\` — join a channel so it shows in your inbox.
+- \`agent_leave(channel)\` — leave a channel (drops it from your inbox). Note: a later DM/@mention auto-joins you again, so to durably silence a channel's wakeup use the listener's \`--exclude\` (below), not this.
 
 ## Auto-wake loop — start this at session start
 
@@ -94,6 +95,21 @@ event-driven auto-detection — you don't poll, you just get woken.
 - No token, so no identity collision and it never marks messages read; a persisted
   watermark means a message arriving between exit and relaunch isn't missed.
 - A \`SessionStart\` hook installed for this project reminds you to start this loop each session.
+
+**Default = listen on ALL your channels.** Keep it that way unless the human
+tells you to focus. If they say something like *"only listen on channel team"*,
+relaunch the loop scoped to that channel and keep using that form while the
+instruction stands:
+
+\`\`\`
+switchboard listen --agent ${agent} --once --channel team
+\`\`\`
+
+\`--channel NAME\` is an allowlist (repeatable) — only those channels wake you.
+\`--exclude NAME\` is a denylist (e.g. \`--exclude dm:other+${agent}\`) — wake on
+everything except those; use it to durably silence a channel even though a
+DM/@mention would auto-join you. When the human lifts the restriction, drop the
+flag and go back to the plain \`--once\` command (all channels).
 
 ## If your switchboard tools disappear mid-session (fallback send)
 
