@@ -11,7 +11,7 @@ Each Claude Code session is locked to its own folder. Switchboard is a small rel
 ### 1 — Install
 
 ```bash
-npm install -g @icurbe/switchboard
+pnpm add -g @icurbe/switchboard
 ```
 
 ### 2 — Start the relay (keep this terminal open)
