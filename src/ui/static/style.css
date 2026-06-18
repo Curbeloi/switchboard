@@ -131,3 +131,56 @@
 .settings-section:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
 .settings-section h3 { font-size: 14px; margin: 0 0 10px 0; color: #0f172a; }
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+/* ---------- dark theme (toggled via .dark on <html>) ---------- */
+.dark .panel {
+  background: #1e293b; /* slate-800 */
+  border-color: #334155; /* slate-700 */
+  color: #e2e8f0; /* slate-200 */
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+.dark .panel h2 { color: #f1f5f9; } /* slate-100 */
+.dark .panel .sub { color: #94a3b8; } /* slate-400 */
+.dark .step-title { color: #f1f5f9; }
+.dark .steps .step { background: #334155; }
+
+.dark .field > label { color: #94a3b8; }
+.dark .field input[type="text"],
+.dark .field textarea,
+.dark .field select {
+  background: #0f172a; /* slate-900 */
+  color: #f1f5f9;
+  border-color: #475569; /* slate-600 */
+}
+.dark .field .hint { color: #94a3b8; }
+
+.dark .mode-option {
+  border-color: #334155;
+  background: #0f172a;
+}
+.dark .mode-option:hover { border-color: #3b82f6; } /* blue-500 */
+.dark .mode-option.selected { border-color: #3b82f6; background: rgba(59, 130, 246, 0.12); }
+.dark .mode-option .mo-name { color: #f1f5f9; }
+.dark .mode-option .mo-desc { color: #94a3b8; }
+
+.dark .contract-list li {
+  border-color: #334155;
+  background: #0f172a;
+}
+.dark .empty-note { color: #94a3b8; }
+
+.dark .panel-footer { border-color: #334155; }
+
+.dark .btn {
+  background: #1e293b;
+  color: #e2e8f0;
+  border-color: #475569;
+}
+.dark .btn:hover { border-color: #3b82f6; color: #60a5fa; } /* blue-400 */
+.dark .btn-primary { background: #2563eb; color: #ffffff; border-color: #2563eb; }
+.dark .btn-primary:hover { background: #1d4ed8; color: #ffffff; border-color: #1d4ed8; }
+.dark .btn-danger { color: #f87171; border-color: #7f1d1d; } /* red-400 / red-900 */
+.dark .btn-danger:hover { background: #450a0a; border-color: #ef4444; color: #fca5a5; }
+
+.dark .settings-section { border-color: #334155; }
+.dark .settings-section h3 { color: #f1f5f9; }

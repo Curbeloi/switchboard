@@ -37,6 +37,7 @@
       "closed": "Closed",
       "newConvTitle": "new conversation title…",
       "newConvPurpose": "purpose (optional)",
+      "noContract": "no contract",
       "openConversation": "+ Open conversation",
       // col 3: messages + state doc
       "selectConversation": "Select a conversation",
@@ -138,6 +139,7 @@
       "closed": "Cerradas",
       "newConvTitle": "título de la conversación…",
       "newConvPurpose": "propósito (opcional)",
+      "noContract": "sin contrato",
       "openConversation": "+ Abrir conversación",
       // col 3: messages + state doc
       "selectConversation": "Elegí una conversación",

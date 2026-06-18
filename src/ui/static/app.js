@@ -33,6 +33,11 @@
   const emptyHint = document.getElementById("empty-hint");
   const overlay = document.getElementById("overlay");
   const settingsBtn = document.getElementById("settings-btn");
+  const themeSelect = document.getElementById("theme-select");
+  const langSelect = document.getElementById("lang-select");
+
+  /* ---------- i18n shortcut ---------- */
+  const t = (key, vars) => window.SBI18n.t(key, vars);
 
   /* ---------- state ---------- */
   let reviewerAvailable = false;
@@ -61,10 +66,10 @@
     statusEl.className =
       "text-xs px-2.5 py-1 rounded-full font-mono " +
       (state === "connected"
-        ? "bg-green-100 text-green-800"
+        ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
         : state === "disconnected"
-        ? "bg-red-100 text-red-800"
-        : "bg-amber-100 text-amber-800");
+        ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+        : "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200");
     statusEl.textContent = label;
   }
 
@@ -86,13 +91,13 @@
 
   function renderAgents() {
     if (agents.size === 0) {
-      agentsList.innerHTML = '<li class="text-xs text-slate-400 italic px-2">no agents yet</li>';
+      agentsList.innerHTML = `<li class="text-xs text-slate-400 italic px-2">${escapeHtml(t("noAgents"))}</li>`;
       return;
     }
     agentsList.innerHTML = "";
     for (const a of agents.values()) {
       const li = document.createElement("li");
-      li.className = "text-xs font-mono text-slate-700 px-2 py-0.5";
+      li.className = "text-xs font-mono text-slate-700 dark:text-slate-300 px-2 py-0.5";
       li.textContent = a.name;
       agentsList.appendChild(li);
     }
@@ -100,7 +105,7 @@
 
   function renderChannels() {
     if (channels.size === 0) {
-      channelsList.innerHTML = '<li class="text-xs text-slate-400 italic px-2">no channels yet</li>';
+      channelsList.innerHTML = `<li class="text-xs text-slate-400 italic px-2">${escapeHtml(t("noChannels"))}</li>`;
       return;
     }
     channelsList.innerHTML = "";
@@ -109,23 +114,23 @@
       const active = name === selectedChannel;
       li.className =
         "group flex items-center justify-between gap-1 px-2 py-1 rounded cursor-pointer " +
-        (active ? "bg-blue-600 text-white" : "hover:bg-slate-100");
+        (active ? "bg-blue-600 text-white" : "hover:bg-slate-100 dark:hover:bg-slate-700");
       const count = info.messageCount ?? 0;
       const badgeCls = active
         ? "bg-white/20 text-white"
-        : "bg-slate-200 text-slate-600";
+        : "bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300";
       li.innerHTML = `
         <span class="font-mono text-xs truncate">${escapeHtml(name)}</span>
         <span class="text-[10px] ${badgeCls} px-1.5 rounded-full tabular-nums">${count}</span>
       `;
-      li.title = `members: ${(info.members || []).join(", ") || "(none)"}`;
+      li.title = t("members", { list: (info.members || []).join(", ") || t("membersNone") });
       li.onclick = () => selectChannel(name);
       const del = document.createElement("button");
       del.className =
         "invisible group-hover:visible text-[11px] px-1 " +
         (active ? "text-white/80 hover:text-white" : "text-slate-400 hover:text-red-500");
       del.textContent = "✕";
-      del.title = "delete channel";
+      del.title = t("deleteChannel");
       del.onclick = (ev) => { ev.stopPropagation(); deleteChannel(name); };
       li.appendChild(del);
       channelsList.appendChild(li);
@@ -137,20 +142,20 @@
   function renderConversationsPane() {
     if (!selectedChannel) {
       convChannelName.textContent = "—";
-      convChannelMeta.textContent = "select a channel";
+      convChannelMeta.textContent = t("selectChannel");
       convNewPane.classList.add("hidden");
       conversationsList.innerHTML = "";
       return;
     }
     const info = channels.get(selectedChannel) || { members: [] };
     convChannelName.textContent = selectedChannel;
-    convChannelMeta.textContent = `members: ${(info.members || []).join(", ") || "(none)"}`;
+    convChannelMeta.textContent = t("members", { list: (info.members || []).join(", ") || t("membersNone") });
     convNewPane.classList.remove("hidden");
 
     const list = convsOfChannel(selectedChannel);
     if (list.length === 0) {
       conversationsList.innerHTML =
-        '<li class="text-xs text-slate-400 italic px-2 py-2">no conversations yet — open one above</li>';
+        `<li class="text-xs text-slate-400 italic px-2 py-2">${escapeHtml(t("noConversations"))}</li>`;
       return;
     }
     conversationsList.innerHTML = "";
@@ -158,11 +163,11 @@
     const closed = list.filter((c) => c.status === "closed");
 
     if (open.length) {
-      appendConvSectionLabel("Open");
+      appendConvSectionLabel(t("open"));
       for (const c of open) conversationsList.appendChild(convItem(c));
     }
     if (closed.length) {
-      appendConvSectionLabel("Closed");
+      appendConvSectionLabel(t("closed"));
       for (const c of closed) conversationsList.appendChild(convItem(c));
     }
   }
@@ -181,17 +186,17 @@
       (active
         ? "bg-blue-600 text-white"
         : isClosed
-        ? "bg-slate-100 hover:bg-slate-200 text-slate-500"
-        : "hover:bg-slate-100");
+        ? "bg-slate-100 hover:bg-slate-200 text-slate-500 dark:bg-slate-700/50 dark:hover:bg-slate-700 dark:text-slate-400"
+        : "hover:bg-slate-100 dark:hover:bg-slate-700");
     const unread = unreadCountInConv(c.id);
     const unreadBadge = unread > 0
-      ? `<span class="text-[10px] ${active ? "bg-white/20 text-white" : "bg-amber-100 text-amber-800"} px-1.5 rounded-full ml-1 tabular-nums">${unread}</span>`
+      ? `<span class="text-[10px] ${active ? "bg-white/20 text-white" : "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200"} px-1.5 rounded-full ml-1 tabular-nums">${unread}</span>`
       : "";
     const contractBadge = c.contract_name
-      ? `<span class="text-[10px] ${active ? "bg-white/20 text-white" : "bg-indigo-100 text-indigo-700"} px-1.5 rounded font-mono ml-1" title="governed by contract">${escapeHtml(c.contract_name)}</span>`
+      ? `<span class="text-[10px] ${active ? "bg-white/20 text-white" : "bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-200"} px-1.5 rounded font-mono ml-1" title="governed by contract">${escapeHtml(c.contract_name)}</span>`
       : "";
     const outcome = c.closedOutcome ? `<div class="text-[10px] italic mt-0.5 ${active ? "text-white/80" : "text-slate-400"}">→ ${escapeHtml(c.closedOutcome)}</div>` : "";
-    const purpose = c.purpose ? `<div class="text-[11px] mt-0.5 ${active ? "text-white/80" : "text-slate-500"} truncate">${escapeHtml(c.purpose)}</div>` : "";
+    const purpose = c.purpose ? `<div class="text-[11px] mt-0.5 ${active ? "text-white/80" : "text-slate-500 dark:text-slate-400"} truncate">${escapeHtml(c.purpose)}</div>` : "";
     li.innerHTML = `
       <div class="flex items-center justify-between gap-1">
         <span class="font-mono text-xs truncate">${escapeHtml(c.title)}</span>
@@ -209,30 +214,30 @@
   function messageNode(m, withActions) {
     const li = document.createElement("li");
     const base =
-      "rounded border bg-white text-sm px-3 py-2 leading-snug shadow-sm";
+      "rounded border bg-white dark:bg-slate-800 text-sm px-3 py-2 leading-snug shadow-sm";
     const variant =
       m.status === "pending"
-        ? "border-amber-300 border-l-4 border-l-amber-500"
+        ? "border-amber-300 dark:border-amber-700 border-l-4 border-l-amber-500"
         : m.status === "rejected"
-        ? "border-slate-200 opacity-50 line-through"
-        : "border-slate-200";
+        ? "border-slate-200 dark:border-slate-700 opacity-50 line-through"
+        : "border-slate-200 dark:border-slate-700";
     li.className = `${base} ${variant}`;
     const to = Array.isArray(m.to) && m.to.length
-      ? `<span class="text-green-700 text-[11px] font-mono">→ @${m.to.map(escapeHtml).join(" @")}</span>`
+      ? `<span class="text-green-700 dark:text-green-400 text-[11px] font-mono">→ @${m.to.map(escapeHtml).join(" @")}</span>`
       : "";
     const contractName = m.contract
-      ? `<div class="text-[11px] text-green-700 font-mono mt-1">contract: ${escapeHtml(m.contract)}</div>`
+      ? `<div class="text-[11px] text-green-700 dark:text-green-400 font-mono mt-1">${escapeHtml(t("contractLabel", { name: m.contract }))}</div>`
       : "";
     const data = m.data != null
-      ? `<pre class="mt-1 text-[11px] bg-slate-50 border border-slate-200 rounded p-2 overflow-x-auto">${escapeHtml(JSON.stringify(m.data, null, 2))}</pre>`
+      ? `<pre class="mt-1 text-[11px] bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded p-2 overflow-x-auto">${escapeHtml(JSON.stringify(m.data, null, 2))}</pre>`
       : "";
     const review = m.review
-      ? `<div class="mt-1 text-[11px] text-amber-700 font-mono">reviewer: ${escapeHtml(m.review.decision)} — ${escapeHtml(m.review.reason || "")}</div>`
+      ? `<div class="mt-1 text-[11px] text-amber-700 dark:text-amber-400 font-mono">${escapeHtml(t("reviewer", { decision: m.review.decision, reason: m.review.reason || "" }))}</div>`
       : "";
     li.innerHTML = `
       <div class="flex items-baseline justify-between gap-2 mb-0.5">
         <div class="flex items-baseline gap-2 min-w-0">
-          <span class="font-mono text-blue-700 font-semibold">${escapeHtml(m.from)}</span>
+          <span class="font-mono text-blue-700 dark:text-blue-400 font-semibold">${escapeHtml(m.from)}</span>
           ${to}
         </div>
         <span class="text-[11px] text-slate-400 font-mono tabular-nums shrink-0">${fmtTime(m.createdAt)}</span>
@@ -247,11 +252,11 @@
       actions.className = "mt-2 flex gap-2";
       const approve = document.createElement("button");
       approve.className = "rounded bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1 font-semibold";
-      approve.textContent = "approve";
+      approve.textContent = t("approve");
       approve.onclick = () => act(`/api/approval/${m.id}/approve`);
       const reject = document.createElement("button");
       reject.className = "rounded bg-red-500 hover:bg-red-600 text-white text-xs px-3 py-1 font-semibold";
-      reject.textContent = "reject";
+      reject.textContent = t("reject");
       reject.onclick = () => act(`/api/approval/${m.id}/reject`);
       actions.appendChild(approve);
       actions.appendChild(reject);
@@ -262,7 +267,7 @@
 
   function renderMessages() {
     if (!selectedConv) {
-      convTitle.textContent = selectedChannel ? "Select a conversation" : "Select a conversation";
+      convTitle.textContent = t("selectConversation");
       convMeta.textContent = "";
       stateToggleBtn.classList.add("hidden");
       closeConvBtn.classList.add("hidden");
@@ -277,7 +282,9 @@
     if (!c) return;
     emptyHint.hidden = true;
     convTitle.textContent = c.title;
-    const status = c.status === "open" ? "open" : `closed${c.closedOutcome ? ` — ${c.closedOutcome}` : ""}`;
+    const status = c.status === "open"
+      ? t("convStatusOpen")
+      : `${t("convStatusClosed")}${c.closedOutcome ? ` — ${c.closedOutcome}` : ""}`;
     convMeta.textContent = `${c.channel}/${c.id.slice(0, 8)} · ${status}${c.purpose ? ` · ${c.purpose}` : ""}`;
     stateToggleBtn.classList.remove("hidden");
     closeConvBtn.classList.toggle("hidden", c.status !== "open");
@@ -292,7 +299,7 @@
     if (msgs.length === 0 && convPending.length === 0) {
       const li = document.createElement("li");
       li.className = "text-sm text-slate-400 italic";
-      li.textContent = "no messages in this conversation yet";
+      li.textContent = t("noMessages");
       messagesList.appendChild(li);
     } else {
       for (const m of msgs) messagesList.appendChild(messageNode(m, false));
@@ -352,26 +359,26 @@
     const hidden = statePane.classList.contains("hidden");
     if (hidden) {
       statePane.classList.remove("hidden");
-      stateToggleBtn.textContent = "hide state doc";
+      stateToggleBtn.textContent = t("hideStateDoc");
       try {
         const s = await fetch(`/api/conversations/${encodeURIComponent(selectedConv)}/state`)
           .then((r) => r.json());
         stateTextarea.value = s.content || "";
         stateMeta.textContent = s.updatedAt
-          ? `last updated ${fmtTime(s.updatedAt)} by ${s.updatedBy}`
-          : "empty";
+          ? t("stateUpdated", { time: fmtTime(s.updatedAt), by: s.updatedBy })
+          : t("stateEmpty");
         stateMsg.textContent = "";
       } catch {
-        stateMeta.textContent = "(failed to load)";
+        stateMeta.textContent = t("stateLoadFailed");
       }
     } else {
       statePane.classList.add("hidden");
-      stateToggleBtn.textContent = "state doc";
+      stateToggleBtn.textContent = t("stateDoc");
     }
   }
   async function saveStateDoc() {
     if (!selectedConv) return;
-    stateMsg.textContent = "saving…";
+    stateMsg.textContent = t("saving");
     const res = await fetch(`/api/conversations/${encodeURIComponent(selectedConv)}/state`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
@@ -379,12 +386,12 @@
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      stateMsg.textContent = body.error || "save failed";
+      stateMsg.textContent = body.error || t("saveFailed");
       return;
     }
     const data = await res.json();
-    stateMeta.textContent = `last updated ${fmtTime(data.updatedAt)} by ${data.updatedBy}`;
-    stateMsg.textContent = "saved ✓";
+    stateMeta.textContent = t("stateUpdated", { time: fmtTime(data.updatedAt), by: data.updatedBy });
+    stateMsg.textContent = t("saved");
   }
   stateToggleBtn.addEventListener("click", toggleStateDoc);
   stateSaveBtn.addEventListener("click", saveStateDoc);
@@ -392,7 +399,7 @@
   /* ---------- close conversation ---------- */
   closeConvBtn.addEventListener("click", async () => {
     if (!selectedConv) return;
-    const outcome = prompt("Outcome (optional):") || null;
+    const outcome = prompt(t("outcomePrompt")) || null;
     const res = await fetch(`/api/conversations/${encodeURIComponent(selectedConv)}/close`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -400,7 +407,7 @@
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      alert(body.error || "could not close");
+      alert(body.error || t("couldNotClose"));
     }
   });
 
@@ -421,7 +428,7 @@
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      alert(err.error || "could not create conversation");
+      alert(err.error || t("couldNotCreateConv"));
       return;
     }
     newConvTitle.value = "";
@@ -437,7 +444,7 @@
     if (!newConvContract) return;
     const current = newConvContract.value;
     newConvContract.innerHTML =
-      '<option value="">no contract</option>' +
+      `<option value="">${escapeHtml(t("noContract"))}</option>` +
       contractNames.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
     if (current && contractNames.includes(current)) newConvContract.value = current;
   }
@@ -455,15 +462,15 @@
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      alert(body.error || "could not create channel");
+      alert(body.error || t("couldNotCreateChannel"));
     }
   }
   async function deleteChannel(name) {
-    if (!confirm(`Delete channel "${name}"? Its conversations, messages, and state docs are lost.`)) return;
+    if (!confirm(t("deleteChannelConfirm", { name }))) return;
     const res = await fetch(`/api/channels/${encodeURIComponent(name)}`, { method: "DELETE" });
     if (!res.ok && res.status !== 404) {
       const body = await res.json().catch(() => ({}));
-      alert(body.error || "could not delete channel");
+      alert(body.error || t("couldNotDeleteChannel"));
     }
   }
   newChannelBtn.addEventListener("click", async () => {
@@ -478,12 +485,12 @@
   function connect() {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${location.host}/subscribe`);
-    ws.onopen = () => setStatus("connected", "connected");
+    ws.onopen = () => setStatus("connected", t("status.connected"));
     ws.onclose = () => {
-      setStatus("disconnected", "disconnected — retrying in 2s");
+      setStatus("disconnected", t("status.disconnected"));
       setTimeout(connect, 2000);
     };
-    ws.onerror = () => setStatus("disconnected", "error");
+    ws.onerror = () => setStatus("disconnected", t("status.error"));
     ws.onmessage = (event) => handle(JSON.parse(event.data));
   }
 
@@ -545,7 +552,7 @@
             .then((r) => r.json())
             .then((s) => {
               stateTextarea.value = s.content || "";
-              stateMeta.textContent = s.updatedAt ? `last updated ${fmtTime(s.updatedAt)} by ${s.updatedBy}` : "empty";
+              stateMeta.textContent = s.updatedAt ? t("stateUpdated", { time: fmtTime(s.updatedAt), by: s.updatedBy }) : t("stateEmpty");
             });
         }
         break;
@@ -650,7 +657,7 @@
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      alert(body.error || "could not change mode");
+      alert(body.error || t("couldNotChangeMode"));
       const approval = await fetch("/api/approval").then((r) => r.json());
       modeSelect.value = approval.mode;
       return false;
@@ -661,11 +668,7 @@
   modeSelect.addEventListener("change", () => changeMode(modeSelect.value));
 
   /* ---------- overlay: setup wizard + settings (uses style.css classes) ---------- */
-  const MODE_INFO = {
-    manual: "Every message waits for your approval. No LLM, zero tokens.",
-    auto: "Deliver everything immediately, no supervision. No LLM, zero tokens.",
-    llm: "An LLM reviewer approves routine messages, blocks bad ones, and escalates risky ones to you.",
-  };
+  const modeInfo = (m) => t("mode." + m);
   const NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
   function showOverlay(html, mode) {
@@ -680,10 +683,10 @@
   }
 
   function parseSchema(text) {
-    const t = (text || "").trim();
-    if (!t) return { error: "schema is empty" };
+    const s = (text || "").trim();
+    if (!s) return { error: t("schemaEmpty") };
     let v;
-    try { v = JSON.parse(t); } catch (e) { return { error: "invalid JSON: " + e.message }; }
+    try { v = JSON.parse(s); } catch (e) { return { error: "invalid JSON: " + e.message }; }
     if (typeof v !== "object" || v === null || Array.isArray(v)) {
       return { error: "schema must be a JSON object" };
     }
@@ -694,12 +697,12 @@
     return ["manual", "auto", "llm"].map((m) => {
       const disabled = m === "llm" && !reviewerAvailable;
       const cls = "mode-option" + (m === selectedMode ? " selected" : "") + (disabled ? " disabled" : "");
-      const note = disabled ? " (no reviewer — set ANTHROPIC_API_KEY or install the claude CLI)" : "";
+      const note = disabled ? t("noReviewerNote") : "";
       return `<label class="${cls}" data-mode="${m}">
         <input type="radio" name="wiz-mode" value="${m}" ${m === selectedMode ? "checked" : ""} ${disabled ? "disabled" : ""}/>
         <div>
-          <div class="mo-name">${m}${note ? `<span class="mo-desc">${note}</span>` : ""}</div>
-          <div class="mo-desc">${MODE_INFO[m]}</div>
+          <div class="mo-name">${m}${note ? `<span class="mo-desc">${escapeHtml(note)}</span>` : ""}</div>
+          <div class="mo-desc">${escapeHtml(modeInfo(m))}</div>
         </div>
       </label>`;
     }).join("");
@@ -722,35 +725,35 @@
     ).join("");
     let body = "";
     if (wiz.step === 1) {
-      body = `<p class="step-title">1 · Supervision mode</p>
+      body = `<p class="step-title">${escapeHtml(t("wizStep1"))}</p>
         <div class="mode-options">${modeOptionsHtml(wiz.mode)}</div>`;
     } else if (wiz.step === 2) {
-      body = `<p class="step-title">2 · Reviewer policy</p>
+      body = `<p class="step-title">${escapeHtml(t("wizStep2"))}</p>
         <div class="field">
-          <label>Policy / rubric (used only in <code>llm</code> mode)</label>
+          <label>${escapeHtml(t("wizPolicyLabel"))}</label>
           <textarea id="wiz-policy" rows="12">${escapeHtml(wiz.policy)}</textarea>
-          <div class="hint">The LLM reviewer judges each message against this. Leave the default if unsure.</div>
+          <div class="hint">${escapeHtml(t("wizPolicyHint"))}</div>
         </div>`;
     } else {
-      body = `<p class="step-title">3 · Contracts <span class="mo-desc">(optional)</span></p>
+      body = `<p class="step-title">${escapeHtml(t("wizStep3"))} <span class="mo-desc">${escapeHtml(t("wizOptional"))}</span></p>
         ${renderContractListHtml(wiz.contracts, "wiz")}
         <div class="field">
-          <label>Add a contract</label>
-          <input type="text" id="wiz-cname" placeholder="name, e.g. revenue.v1" />
+          <label>${escapeHtml(t("wizAddContract"))}</label>
+          <input type="text" id="wiz-cname" placeholder="${escapeHtml(t("wizContractName"))}" />
           <textarea id="wiz-cschema" rows="8" placeholder='{"type":"object","properties":{...},"required":[...]}'></textarea>
           <div class="field-error" id="wiz-cerr"></div>
-          <button class="btn" id="wiz-cadd" type="button">+ Add contract</button>
+          <button class="btn" id="wiz-cadd" type="button">${escapeHtml(t("wizAddContractBtn"))}</button>
         </div>`;
     }
     const back = wiz.step > 1
-      ? `<button class="btn" id="wiz-back" type="button">Back</button>`
+      ? `<button class="btn" id="wiz-back" type="button">${escapeHtml(t("back"))}</button>`
       : `<span></span>`;
     const next = wiz.step < wiz.total
-      ? `<button class="btn btn-primary" id="wiz-next" type="button">Next</button>`
-      : `<button class="btn btn-primary" id="wiz-finish" type="button">Finish setup</button>`;
+      ? `<button class="btn btn-primary" id="wiz-next" type="button">${escapeHtml(t("next"))}</button>`
+      : `<button class="btn btn-primary" id="wiz-finish" type="button">${escapeHtml(t("finishSetup"))}</button>`;
     showOverlay(`<div class="panel">
-      <h2>Welcome to switchboard</h2>
-      <p class="sub">Let's set up supervision, the reviewer policy, and any shared contracts. These are saved to disk and reused on every restart.</p>
+      <h2>${escapeHtml(t("wizWelcome"))}</h2>
+      <p class="sub">${escapeHtml(t("wizIntro"))}</p>
       <div class="steps">${dots}</div>
       ${body}
       <div class="panel-footer">${back}<div class="right">${next}</div></div>
@@ -785,8 +788,8 @@
     if (add) add.onclick = () => {
       const name = overlay.querySelector("#wiz-cname").value.trim();
       const errEl = overlay.querySelector("#wiz-cerr");
-      if (!NAME_RE.test(name)) { errEl.textContent = "invalid name (A-Z a-z 0-9 . _ -, max 64)"; return; }
-      if (wiz.contracts.some((c) => c.name === name)) { errEl.textContent = `"${name}" already added`; return; }
+      if (!NAME_RE.test(name)) { errEl.textContent = t("invalidName"); return; }
+      if (wiz.contracts.some((c) => c.name === name)) { errEl.textContent = t("contractAlreadyAdded", { name }); return; }
       const parsed = parseSchema(overlay.querySelector("#wiz-cschema").value);
       if (parsed.error) { errEl.textContent = parsed.error; return; }
       wiz.contracts.push({ name, schema: parsed.schema });
@@ -809,7 +812,7 @@
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        alert(body.error || "setup failed");
+        alert(body.error || t("setupFailed"));
         finish.disabled = false;
         return;
       }
@@ -818,12 +821,12 @@
     };
   }
   function renderContractListHtml(contracts, scope) {
-    if (!contracts.length) return `<p class="empty-note">No contracts yet — agents can still send inline schemas.</p>`;
+    if (!contracts.length) return `<p class="empty-note">${escapeHtml(t("noContractsInline"))}</p>`;
     return `<ul class="contract-list">${contracts.map((c) => `
       <li><span>${escapeHtml(c.name)}</span>
         <span class="c-actions">
-          ${scope === "settings" ? `<button class="btn" data-edit="${escapeHtml(c.name)}" type="button">edit</button>` : ""}
-          <button class="btn btn-danger" data-del="${escapeHtml(c.name)}" type="button">remove</button>
+          ${scope === "settings" ? `<button class="btn" data-edit="${escapeHtml(c.name)}" type="button">${escapeHtml(t("edit"))}</button>` : ""}
+          <button class="btn btn-danger" data-del="${escapeHtml(c.name)}" type="button">${escapeHtml(t("remove"))}</button>
         </span></li>`).join("")}</ul>`;
   }
 
@@ -840,31 +843,31 @@
     ).join("");
     showOverlay(`<div class="panel">
       <div class="row-between">
-        <h2>Settings</h2>
-        <button class="btn" id="set-close" type="button">Close</button>
+        <h2>${escapeHtml(t("settings.title"))}</h2>
+        <button class="btn" id="set-close" type="button">${escapeHtml(t("close"))}</button>
       </div>
-      <p class="sub">Saved to ${escapeHtml(data.configDir || "~/.switchboard")} and applied live.</p>
+      <p class="sub">${escapeHtml(t("settingsSavedTo", { dir: data.configDir || "~/.switchboard" }))}</p>
       <div class="settings-section">
-        <h3>Supervision mode</h3>
+        <h3>${escapeHtml(t("supervisionMode"))}</h3>
         <div class="field"><select id="set-mode">${modeSel}</select></div>
       </div>
       <div class="settings-section">
-        <h3>Reviewer policy</h3>
+        <h3>${escapeHtml(t("reviewerPolicy"))}</h3>
         <div class="field">
           <textarea id="set-policy" rows="10">${escapeHtml(policy)}</textarea>
           <div class="field-ok" id="set-policy-msg"></div>
         </div>
-        <button class="btn btn-primary" id="set-policy-save" type="button">Save policy</button>
+        <button class="btn btn-primary" id="set-policy-save" type="button">${escapeHtml(t("savePolicy"))}</button>
       </div>
       <div class="settings-section">
-        <h3>Contracts</h3>
+        <h3>${escapeHtml(t("contracts"))}</h3>
         ${renderContractListHtml(contracts, "settings")}
         <div class="field">
-          <label>Add / update a contract</label>
-          <input type="text" id="set-cname" placeholder="name, e.g. revenue.v1" />
+          <label>${escapeHtml(t("addUpdateContract"))}</label>
+          <input type="text" id="set-cname" placeholder="${escapeHtml(t("wizContractName"))}" />
           <textarea id="set-cschema" rows="8" placeholder='{"type":"object", ...}'></textarea>
           <div class="field-error" id="set-cerr"></div>
-          <button class="btn btn-primary" id="set-csave" type="button">Save contract</button>
+          <button class="btn btn-primary" id="set-csave" type="button">${escapeHtml(t("saveContract"))}</button>
         </div>
       </div>
     </div>`, "settings");
@@ -878,12 +881,12 @@
         body: JSON.stringify({ policy: text }),
       });
       const msg = overlay.querySelector("#set-policy-msg");
-      msg.textContent = res.ok ? "saved ✓" : "save failed";
+      msg.textContent = res.ok ? t("saved") : t("saveFailed");
     };
     overlay.querySelector("#set-csave").onclick = async () => {
       const name = overlay.querySelector("#set-cname").value.trim();
       const errEl = overlay.querySelector("#set-cerr");
-      if (!NAME_RE.test(name)) { errEl.textContent = "invalid name (A-Z a-z 0-9 . _ -, max 64)"; return; }
+      if (!NAME_RE.test(name)) { errEl.textContent = t("invalidName"); return; }
       const parsed = parseSchema(overlay.querySelector("#set-cschema").value);
       if (parsed.error) { errEl.textContent = parsed.error; return; }
       const res = await fetch(`/api/contracts/${encodeURIComponent(name)}`, {
@@ -893,7 +896,7 @@
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        errEl.textContent = body.error || "save failed";
+        errEl.textContent = body.error || t("saveFailed");
         return;
       }
       refreshSettings();
@@ -909,7 +912,7 @@
     });
     overlay.querySelectorAll("[data-del]").forEach((b) => {
       b.onclick = async () => {
-        if (!confirm(`Delete contract "${b.dataset.del}"?`)) return;
+        if (!confirm(t("deleteContractConfirm", { name: b.dataset.del }))) return;
         await fetch(`/api/contracts/${encodeURIComponent(b.dataset.del)}`, { method: "DELETE" });
         refreshSettings();
       };
@@ -917,11 +920,58 @@
   }
   settingsBtn.addEventListener("click", refreshSettings);
 
+  /* ---------- theme (light / dark / auto) ---------- */
+  const THEME_KEY = "sb.theme";
+  const mql = window.matchMedia("(prefers-color-scheme: dark)");
+  function getThemePref() {
+    const p = localStorage.getItem(THEME_KEY);
+    return p === "light" || p === "dark" || p === "auto" ? p : "auto";
+  }
+  function applyTheme(pref) {
+    const dark = pref === "dark" || (pref === "auto" && mql.matches);
+    document.documentElement.classList.toggle("dark", dark);
+  }
+  // React to OS theme changes while in "auto".
+  mql.addEventListener("change", () => {
+    if (getThemePref() === "auto") applyTheme("auto");
+  });
+  if (themeSelect) {
+    themeSelect.value = getThemePref();
+    themeSelect.addEventListener("change", () => {
+      localStorage.setItem(THEME_KEY, themeSelect.value);
+      applyTheme(themeSelect.value);
+    });
+  }
+
+  /* ---------- language ---------- */
+  function rerenderAll() {
+    window.SBI18n.apply();          // static HTML ([data-i18n*])
+    renderAgents();
+    renderChannels();
+    renderConversationsPane();
+    renderMessages();
+    renderContractsSelect();
+    // Re-render the open overlay so its dynamic text follows the language.
+    if (overlayMode === "settings") refreshSettings();
+    else if (overlayMode === "wizard") openWizard(lastSetup || {});
+  }
+  let lastSetup = null;
+  if (langSelect) {
+    langSelect.value = window.SBI18n.getLang();
+    langSelect.addEventListener("change", () => {
+      window.SBI18n.setLang(langSelect.value);
+      rerenderAll();
+    });
+  }
+
   /* ---------- init ---------- */
   async function init() {
-    setStatus("connecting", "connecting…");
+    applyTheme(getThemePref());
+    window.SBI18n.apply();
+    setStatus("connecting", t("status.connecting"));
     try {
       const setup = await fetch("/api/setup").then((r) => r.json());
+      lastSetup = setup;
       defaultPolicy = setup.defaultPolicy || "";
       setReviewerAvailable(Boolean(setup.reviewer?.available));
       if (setup.needed) openWizard(setup);
