@@ -24,6 +24,44 @@ export const DEFAULT_CONFIG_DIR = join(homedir(), ".switchboard");
 
 const NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
+/** Built-in named contracts that are seeded on first boot if absent. The user
+ *  can edit them via the Settings UI — we never overwrite an existing file. */
+const BUILTIN_CONTRACTS = {
+  "dsp.v1": {
+    type: "object",
+    properties: {
+      decision_type: {
+        type: "string",
+        enum: ["ROUTINE", "BOUNDARY", "AMBIGUOUS", "IRREVERSIBLE"],
+        description:
+          "Class of decision. IRREVERSIBLE always escalates regardless of supervision mode.",
+      },
+      confidence: {
+        type: "number",
+        minimum: 0,
+        maximum: 1,
+        description: "Agent's calibrated confidence in this response (0–1).",
+      },
+      escalation_flag: {
+        type: "boolean",
+        description:
+          "Agent's request that a human (or the orchestrator) reviews this before it is acted on.",
+      },
+      trace: {
+        type: "string",
+        description: "Short, human-readable reasoning summary.",
+      },
+      verifier_summary: {
+        type: "string",
+        description:
+          "Summary of an independent checker sub-agent's verdict (writer/checker pattern).",
+      },
+    },
+    required: ["decision_type", "confidence", "escalation_flag"],
+    additionalProperties: false,
+  },
+};
+
 export function createConfigStore(dir = DEFAULT_CONFIG_DIR) {
   const contractsDir = join(dir, "contracts");
   const configPath = join(dir, "config.json");
@@ -32,6 +70,19 @@ export function createConfigStore(dir = DEFAULT_CONFIG_DIR) {
   function ensureDir() {
     mkdirSync(contractsDir, { recursive: true });
   }
+
+  /** Seed any built-in contract whose file is missing. Idempotent: never
+   *  overwrites a contract the user has already edited locally. */
+  function seedBuiltinContracts() {
+    ensureDir();
+    for (const [name, schema] of Object.entries(BUILTIN_CONTRACTS)) {
+      const p = join(contractsDir, `${name}.json`);
+      if (!existsSync(p)) {
+        writeFileSync(p, JSON.stringify(schema, null, 2));
+      }
+    }
+  }
+  seedBuiltinContracts();
 
   function validName(name) {
     return typeof name === "string" && NAME_RE.test(name);

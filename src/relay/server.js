@@ -63,7 +63,11 @@ export async function startRelay({
       if (event.type !== "message.pending") return;
       if (store.getMode() !== "llm") return;
       const msg = event.message;
-      const { decision, reason } = await reviewer.review(msg);
+      // Enrich the reviewer's view with the conversation's active contract,
+      // so the policy can judge intent (DSP v1 contract awareness).
+      const conv = store.getConversation(msg.conversationId);
+      const enriched = { ...msg, contract_name: conv?.contract_name ?? null };
+      const { decision, reason } = await reviewer.review(enriched);
       const review = { decision, reason, at: Date.now(), by: reviewer.backend };
       if (decision === "approve") {
         const delivered = store.approvePending(msg.id, review);

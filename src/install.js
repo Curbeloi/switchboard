@@ -122,6 +122,50 @@ Suggested state doc layout (plain markdown, keep it short):
 - <questions for the human, choices made>
 \`\`\`
 
+## Don't grade your own homework (writer / checker)
+
+The model that wrote a change is too generous reviewing it. For **substantive
+posts** (code changes, design decisions, anything you'd ask a reviewer to look
+at on a PR), spawn an independent checker sub-agent **before** \`agent_send\`,
+and include its verdict in your message.
+
+In Claude Code, use the **Task tool** with a reviewer subagent:
+
+\`\`\`
+Task({
+  subagent_type: "code-reviewer",   // or "Explore" for finding-style checks
+  description: "review diff",
+  prompt: "Review this <diff|design|claim> for correctness, edge cases, and risks. Return: verdict (approve|fix|reject), reasoning (2–4 lines), specific issues."
+})
+\`\`\`
+
+Read the verdict. If issues are real, fix them and re-check. **Then** post with
+the \`dsp.v1\` contract filled (the relay validates the schema; the reviewer
+judges intent):
+
+\`\`\`
+agent_send("team", "Migration ready: adds idx_users_email; no FK changes",
+  contract: "dsp.v1",
+  data: {
+    decision_type: "BOUNDARY",
+    confidence: 0.85,
+    escalation_flag: false,
+    verifier_summary: "checker approved: index is concurrent-safe; rollback documented in 02_down.sql"
+  }
+)
+\`\`\`
+
+Use \`decision_type\` to tell the orchestrator what kind of action this is:
+
+- **ROUTINE** — status updates, lookups, syncs. No checker needed. Low risk.
+- **BOUNDARY** — code changes, design decisions. **Checker required**; \`verifier_summary\` must be substantive (not "looks good").
+- **AMBIGUOUS** — the instruction or data is unclear. Set \`escalation_flag: true\`, the \`content\` asks the orchestrator for clarification, and **don't act yet**.
+- **IRREVERSIBLE** — destructive operation (deploy, migration, force-push, rm). Set \`escalation_flag: true\` and \`decision_type: "IRREVERSIBLE"\`. **The relay forces the message to wait for human approval regardless of supervision mode** — no level of confidence authorizes autonomous execution.
+
+When a conversation is opened with \`contract: "dsp.v1"\` (or any contract), every
+message in it must carry valid \`data\`. The relay rejects missing or malformed
+data with HTTP 400 before the message ever reaches another agent.
+
 ## Auto-wake loop — start this at session start
 
 There are no push notifications, and \`agent_wait\` blocks your turn. To react to

@@ -5,9 +5,10 @@
  * Same closure-factory shape — routes/MCP talk to it through the documented
  * methods only.
  *
- * Persisted (schema v2):
+ * Persisted (schema v3):
  *   - agents (+tokens), channels, channel_members
- *   - conversations (threads within a channel; own state doc + own message stream)
+ *   - conversations (threads within a channel; own state doc + own message
+ *     stream; optional `contract_name` for DSP-style governance)
  *   - messages (keyed by conversation_id; channel kept for lookup)
  *   - read_cursors (per-agent, per-conversation)
  *   - conversation_state (the "PROGRESS.md" of each loop)
@@ -15,10 +16,8 @@
  * Kept in-memory (transient): live `agent_wait` long-poll waiters, and the
  * supervision `mode` (which itself persists via config.js, restored on boot).
  *
- * Migration: PRAGMA user_version is the schema gate. Any pre-v3 database
- * (channel-flat messages, channel-level state docs) is upgraded **once** on
- * first boot: each existing channel gets a `default` conversation that absorbs
- * its messages, read cursors, and state doc.
+ * Migration: PRAGMA user_version is the schema gate. Migrations are stacked
+ * forward; old DBs walk v0/v1 → v2 → v3 in one boot, idempotent on reopen.
  */
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
@@ -26,7 +25,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DEFAULT_CONFIG_DIR } from "./config.js";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db") } = {}) {
   if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
@@ -59,8 +58,8 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
 
     /* conversations */
     insConv: db.prepare(`INSERT INTO conversations
-      (id, channel, title, purpose, successCriteria, status, createdAt, createdBy)
-      VALUES (?, ?, ?, ?, ?, 'open', ?, ?)`),
+      (id, channel, title, purpose, successCriteria, contract_name, status, createdAt, createdBy)
+      VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)`),
     convById: db.prepare("SELECT * FROM conversations WHERE id = ?"),
     convsByChannel: db.prepare(
       "SELECT * FROM conversations WHERE channel = ? ORDER BY createdAt DESC"
@@ -74,6 +73,7 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
     closeConv: db.prepare(
       "UPDATE conversations SET status = 'closed', closedAt = ?, closedBy = ?, closedOutcome = ? WHERE id = ?"
     ),
+    updConvContract: db.prepare("UPDATE conversations SET contract_name = ? WHERE id = ?"),
     delConvsOfChannel: db.prepare("DELETE FROM conversations WHERE channel = ?"),
 
     /* messages (keyed by conversation_id) */
@@ -157,6 +157,7 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
       title: r.title,
       purpose: r.purpose ?? null,
       successCriteria: r.successCriteria ?? null,
+      contract_name: r.contract_name ?? null,
       status: r.status,
       createdAt: r.createdAt,
       createdBy: r.createdBy,
@@ -238,7 +239,7 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
     const now = Date.now();
     const parts = channel.slice(3).split("+");
     const purpose = parts.length === 2 ? `1:1 between ${parts[0]} and ${parts[1]}` : null;
-    q.insConv.run(id, channel, "direct", purpose, null, now, "system");
+    q.insConv.run(id, channel, "direct", purpose, null, null, now, "system");
     return rowToConversation(q.convById.get(id));
   }
 
@@ -322,10 +323,17 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
     },
 
     /* conversations (threads inside a channel) */
-    createConversation({ channel, title, purpose = null, successCriteria = null, createdBy }) {
+    createConversation({
+      channel,
+      title,
+      purpose = null,
+      successCriteria = null,
+      contractName = null,
+      createdBy,
+    }) {
       ensureChannel(channel);
       const id = randomUUID();
-      q.insConv.run(id, channel, title, purpose, successCriteria, Date.now(), createdBy);
+      q.insConv.run(id, channel, title, purpose, successCriteria, contractName, Date.now(), createdBy);
       return rowToConversation(q.convById.get(id));
     },
     getConversation(id) {
@@ -341,6 +349,13 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
       const row = q.convById.get(id);
       if (!row || row.status !== "open") return null;
       q.closeConv.run(Date.now(), closedBy ?? "system", outcome, id);
+      return rowToConversation(q.convById.get(id));
+    },
+    /** Set or clear the active named contract on a conversation. */
+    setConversationContract(id, contractName) {
+      const row = q.convById.get(id);
+      if (!row) return null;
+      q.updConvContract.run(contractName ?? null, id);
       return rowToConversation(q.convById.get(id));
     },
     latestOpenConversation(channel) {
@@ -360,6 +375,11 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
       ensureChannel(conv.channel);
       q.insMember.run(conv.channel, from);
       for (const m of to) q.insMember.run(conv.channel, m);
+      // DSP safety axiom: a message declaring `decision_type: "IRREVERSIBLE"`
+      // is forced to `pending` regardless of supervision mode — no level of
+      // confidence authorizes autonomous execution of an irreversible action.
+      const forceQueue = data != null && data.decision_type === "IRREVERSIBLE";
+      const status = forceQueue ? "pending" : (mode === "auto" ? "delivered" : "pending");
       const msg = {
         id: randomUUID(),
         conversationId,
@@ -371,7 +391,7 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
         schema,
         contract,
         createdAt: Date.now(),
-        status: mode === "auto" ? "delivered" : "pending",
+        status,
       };
       q.insMsg.run(
         msg.id, conversationId, conv.channel, from, content,
@@ -496,14 +516,20 @@ function ensureSchema(db) {
   ).get();
 
   if (!hasMessages) {
-    createV2Schema(db);
-  } else {
-    migrateToV2(db);
+    // Fresh DB → build the latest schema directly.
+    createLatestSchema(db);
+    db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+    return;
   }
+
+  // Walk migrations forward. Each is idempotent and only applies if the schema
+  // is still at the prior version on disk.
+  if (userVersion < 2) migrateV1toV2(db);
+  if (userVersion < 3) migrateV2toV3(db);
   db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
 }
 
-function createV2Schema(db) {
+function createLatestSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS agents (
       name TEXT PRIMARY KEY,
@@ -526,6 +552,7 @@ function createV2Schema(db) {
       title TEXT NOT NULL,
       purpose TEXT,
       successCriteria TEXT,
+      contract_name TEXT,
       status TEXT NOT NULL DEFAULT 'open',
       createdAt INTEGER NOT NULL,
       createdBy TEXT NOT NULL,
@@ -566,10 +593,10 @@ function createV2Schema(db) {
   `);
 }
 
-/** Migrate a pre-v3 DB (channel-flat messages, channel-level state) to v2 schema:
- *  every existing channel gets a "default" open conversation that absorbs its
- *  messages, read cursors, and (if present) the v2.8.0 channel-level state doc. */
-function migrateToV2(db) {
+/** v1 → v2 (introduced in v3.0.0): flat-channel DB gains conversations.
+ *  Each existing channel gets a "default" open conversation that absorbs its
+ *  messages, read cursors, and (if present) v2.8.0 channel-level state doc. */
+function migrateV1toV2(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
@@ -593,7 +620,6 @@ function migrateToV2(db) {
     );
   `);
 
-  /* 1. One default conversation per existing channel. */
   const channels = db.prepare("SELECT name, createdAt FROM channels").all();
   const insertConv = db.prepare(`INSERT INTO conversations
     (id, channel, title, purpose, successCriteria, status, createdAt, createdBy)
@@ -611,7 +637,6 @@ function migrateToV2(db) {
     channelToConv.set(ch.name, convId);
   }
 
-  /* 2. messages.conversation_id: add column + backfill. */
   const msgCols = db.prepare("PRAGMA table_info(messages)").all().map((c) => c.name);
   if (!msgCols.includes("conversation_id")) {
     db.exec("ALTER TABLE messages ADD COLUMN conversation_id TEXT");
@@ -621,7 +646,6 @@ function migrateToV2(db) {
   db.exec(`DROP INDEX IF EXISTS idx_messages_channel;`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages (conversation_id, status, createdAt);`);
 
-  /* 3. read_cursors: rebuild with (agent, conversation_id) PK. */
   const hasOldCursors = db.prepare(
     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='read_cursors'"
   ).get();
@@ -653,7 +677,6 @@ function migrateToV2(db) {
     );`);
   }
 
-  /* 4. channel_state → conversation_state (only present from v2.8.0 onwards). */
   const hasChannelState = !!db.prepare(
     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='channel_state'"
   ).get();
@@ -669,6 +692,15 @@ function migrateToV2(db) {
       if (convId) insState.run(convId, s.content, s.updatedAt, s.updatedBy);
     }
     db.exec("DROP TABLE channel_state");
+  }
+}
+
+/** v2 → v3 (introduced in v3.1.0): conversations gain an optional
+ *  `contract_name` for DSP-style per-conversation governance. */
+function migrateV2toV3(db) {
+  const convCols = db.prepare("PRAGMA table_info(conversations)").all().map((c) => c.name);
+  if (!convCols.includes("contract_name")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN contract_name TEXT");
   }
 }
 

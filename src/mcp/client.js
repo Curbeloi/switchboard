@@ -45,10 +45,11 @@ export function createRelayClient(relayUrl, token = null) {
     },
 
     /* conversations (threads inside a channel) */
-    createConversation(channel, { title, purpose, successCriteria } = {}) {
+    createConversation(channel, { title, purpose, successCriteria, contractName } = {}) {
       const body = { title };
       if (purpose != null) body.purpose = purpose;
       if (successCriteria != null) body.successCriteria = successCriteria;
+      if (contractName != null) body.contract_name = contractName;
       return request(`/api/channels/${encodeURIComponent(channel)}/conversations`, {
         method: "POST",
         body: JSON.stringify(body),
@@ -65,6 +66,12 @@ export function createRelayClient(relayUrl, token = null) {
       return request(`/api/conversations/${encodeURIComponent(id)}/close`, {
         method: "POST",
         body: JSON.stringify(outcome != null ? { outcome } : {}),
+      });
+    },
+    setConversationContract(id, contractName) {
+      return request(`/api/conversations/${encodeURIComponent(id)}/contract`, {
+        method: "PUT",
+        body: JSON.stringify({ contract_name: contractName }),
       });
     },
 

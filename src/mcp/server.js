@@ -125,7 +125,7 @@ const TOOLS = [
   {
     name: "agent_conversation_start",
     description:
-      "Open a new conversation (thread) inside a channel for a focused task. Each loop should live in its own conversation: it gets its own message stream, state doc (PROGRESS.md), and unread cursor. Returns `{ id, channel, title, status: 'open' }`. Pass `purpose` and `successCriteria` so the team knows what 'done' means.",
+      "Open a new conversation (thread) inside a channel for a focused task. Each loop should live in its own conversation: it gets its own message stream, state doc (PROGRESS.md), and unread cursor. Returns `{ id, channel, title, status: 'open', contract_name }`. Pass `purpose` and `successCriteria` so the team knows what 'done' means. Optionally pass `contract` (e.g. \"dsp.v1\") to make this a governed conversation — every message posted to it MUST carry `data` matching that contract.",
     inputSchema: {
       type: "object",
       properties: {
@@ -133,8 +133,22 @@ const TOOLS = [
         title: { type: "string", description: "Short topic of the conversation (e.g. 'fix flaky-test-a')." },
         purpose: { type: "string", description: "What this conversation is doing, in one sentence." },
         successCriteria: { type: "string", description: "Objective signal that means 'close this loop'. Should be checkable." },
+        contract: { type: "string", description: "Optional: name of a named contract (e.g. 'dsp.v1') that ALL messages in this conversation must match. The relay rejects (400) any post without `data` validating against the contract's schema." },
       },
       required: ["channel", "title"],
+    },
+  },
+  {
+    name: "agent_conversation_set_contract",
+    description:
+      "Set (or clear) the active named contract on an existing conversation. Pass a contract name (e.g. 'dsp.v1') to govern it from now on, or null to remove the contract. Subsequent messages must carry `data` matching the contract's schema; the reviewer judges the response against the contract's intent.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        conversation: { type: "string", description: "Conversation id." },
+        contract_name: { type: ["string", "null"], description: "Name of a named contract, or null to clear." },
+      },
+      required: ["conversation"],
     },
   },
   {
@@ -300,7 +314,7 @@ export async function runMcp({ agent, relayUrl }) {
   }
 
   const server = new Server(
-    { name: "@icurbe/switchboard", version: "3.0.1" },
+    { name: "@icurbe/switchboard", version: "3.1.0" },
     { capabilities: { tools: {} } }
   );
 
@@ -385,14 +399,27 @@ export async function runMcp({ agent, relayUrl }) {
           );
         }
         case "agent_conversation_start": {
-          const { channel, title, purpose, successCriteria } = args;
+          const { channel, title, purpose, successCriteria, contract } = args;
           const conv = await call(() =>
-            client.createConversation(channel, { title, purpose, successCriteria })
+            client.createConversation(channel, { title, purpose, successCriteria, contractName: contract })
           );
-          const meta = [purpose ? `purpose: ${purpose}` : null, successCriteria ? `success: ${successCriteria}` : null]
-            .filter(Boolean).join(" — ");
+          const meta = [
+            purpose ? `purpose: ${purpose}` : null,
+            successCriteria ? `success: ${successCriteria}` : null,
+            contract ? `contract: ${contract}` : null,
+          ].filter(Boolean).join(" — ");
           return reply(
             `opened conversation "${title}" (${conv.id}) in "${channel}"${meta ? ` — ${meta}` : ""}`
+          );
+        }
+        case "agent_conversation_set_contract": {
+          const { conversation, contract_name = null } = args;
+          const conv = await call(() => client.setConversationContract(conversation, contract_name));
+          return reply(
+            contract_name
+              ? `conversation "${conv.title}" (${conv.id.slice(0, 8)}) now governed by contract "${contract_name}"`
+              : `conversation "${conv.title}" (${conv.id.slice(0, 8)}) contract cleared`,
+            { hint: false }
           );
         }
         case "agent_conversation_list": {

@@ -114,10 +114,12 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
 
   /* Conversations (threads inside a channel) — every loop lives in one.
    * Either an agent (Bearer token) or a human supervisor (no token) can open
-   * a conversation; the human is recorded as `createdBy: "supervisor"`. */
+   * a conversation; the human is recorded as `createdBy: "supervisor"`.
+   * Optional `contract_name` makes this a DSP-governed conversation: all
+   * messages posted to it must carry `data` matching the named contract. */
   api.post("/channels/:channel/conversations", (req, res) => {
     const agent = optionalAgent(req);
-    const { title, purpose = null, successCriteria = null } = req.body ?? {};
+    const { title, purpose = null, successCriteria = null, contract_name = null } = req.body ?? {};
     if (!title || typeof title !== "string") {
       return res.status(400).json({ error: "title required (string)" });
     }
@@ -127,16 +129,43 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     if (successCriteria != null && typeof successCriteria !== "string") {
       return res.status(400).json({ error: "successCriteria must be string when provided" });
     }
+    if (contract_name != null) {
+      if (typeof contract_name !== "string" || !config) {
+        return res.status(400).json({ error: "contract_name must be a known contract name" });
+      }
+      if (!config.getContract(contract_name)) {
+        return res.status(400).json({ error: `unknown contract: ${contract_name}` });
+      }
+    }
     const createdBy = agent?.name ?? "supervisor";
     const conv = store.createConversation({
       channel: req.params.channel,
       title,
       purpose,
       successCriteria,
+      contractName: contract_name,
       createdBy,
     });
     if (agent) store.joinChannel(req.params.channel, agent.name);
     broadcast({ type: "conversation.created", conversation: conv });
+    res.json(conv);
+  });
+
+  /* Set or clear the active contract on an existing conversation. */
+  api.put("/conversations/:id/contract", (req, res) => {
+    optionalAgent(req); // accepts agent token OR supervisor (no token)
+    const { contract_name = null } = req.body ?? {};
+    if (contract_name != null) {
+      if (typeof contract_name !== "string" || !config) {
+        return res.status(400).json({ error: "contract_name must be a known contract name" });
+      }
+      if (!config.getContract(contract_name)) {
+        return res.status(400).json({ error: `unknown contract: ${contract_name}` });
+      }
+    }
+    const conv = store.setConversationContract(req.params.id, contract_name);
+    if (!conv) return res.status(404).json({ error: "conversation not found" });
+    broadcast({ type: "conversation.updated", conversation: conv });
     res.json(conv);
   });
 
@@ -306,8 +335,18 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     }
 
     const data = req.body?.data ?? null;
-    const contractName = req.body?.contract ?? null;
+    // The conversation may have an active contract (DSP-style governance). If
+    // it does and the message didn't name a `contract` explicitly, apply the
+    // conv's contract. The relay then enforces presence of `data` and validates
+    // it against the contract's schema before queueing.
+    const convContract = conv?.contract_name ?? null;
+    let contractName = req.body?.contract ?? convContract;
     let schema = req.body?.schema ?? null;
+    if (convContract && !data) {
+      return res.status(400).json({
+        error: `conversation requires data matching contract "${convContract}"`,
+      });
+    }
     if (contractName != null) {
       if (typeof contractName !== "string" || !config) {
         return res.status(400).json({ error: "contract must be a known contract name" });

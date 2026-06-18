@@ -13,6 +13,7 @@
   const convNewPane = document.getElementById("conv-new");
   const newConvTitle = document.getElementById("new-conv-title");
   const newConvPurpose = document.getElementById("new-conv-purpose");
+  const newConvContract = document.getElementById("new-conv-contract");
   const newConvBtn = document.getElementById("new-conv-btn");
   const conversationsList = document.getElementById("conversations");
 
@@ -44,6 +45,7 @@
   const convsByChannel = new Map();         // channel → Set<convId>
   const messagesByConv = new Map();         // convId → msg[]
   const pending = new Map();                // msgId → message (global)
+  let contractNames = [];                   // string[] — named contracts (e.g. dsp.v1)
 
   let selectedChannel = null;
   let selectedConv = null;
@@ -182,15 +184,18 @@
         ? "bg-slate-100 hover:bg-slate-200 text-slate-500"
         : "hover:bg-slate-100");
     const unread = unreadCountInConv(c.id);
-    const badge = unread > 0
+    const unreadBadge = unread > 0
       ? `<span class="text-[10px] ${active ? "bg-white/20 text-white" : "bg-amber-100 text-amber-800"} px-1.5 rounded-full ml-1 tabular-nums">${unread}</span>`
+      : "";
+    const contractBadge = c.contract_name
+      ? `<span class="text-[10px] ${active ? "bg-white/20 text-white" : "bg-indigo-100 text-indigo-700"} px-1.5 rounded font-mono ml-1" title="governed by contract">${escapeHtml(c.contract_name)}</span>`
       : "";
     const outcome = c.closedOutcome ? `<div class="text-[10px] italic mt-0.5 ${active ? "text-white/80" : "text-slate-400"}">→ ${escapeHtml(c.closedOutcome)}</div>` : "";
     const purpose = c.purpose ? `<div class="text-[11px] mt-0.5 ${active ? "text-white/80" : "text-slate-500"} truncate">${escapeHtml(c.purpose)}</div>` : "";
     li.innerHTML = `
       <div class="flex items-center justify-between gap-1">
         <span class="font-mono text-xs truncate">${escapeHtml(c.title)}</span>
-        ${badge}
+        <span class="flex items-center shrink-0">${contractBadge}${unreadBadge}</span>
       </div>
       ${purpose}
       ${outcome}
@@ -407,22 +412,34 @@
     const body = { title };
     const purpose = newConvPurpose.value.trim();
     if (purpose) body.purpose = purpose;
+    const contract = newConvContract?.value || "";
+    if (contract) body.contract_name = contract;
     const res = await fetch(`/api/channels/${encodeURIComponent(selectedChannel)}/conversations`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      alert(body.error || "could not create conversation");
+      const err = await res.json().catch(() => ({}));
+      alert(err.error || "could not create conversation");
       return;
     }
     newConvTitle.value = "";
     newConvPurpose.value = "";
+    if (newConvContract) newConvContract.value = "";
     // conversation.created broadcast will refresh; also auto-select the new one.
     const conv = await res.json();
     mergeConversations([conv]);
     selectConversation(conv.id);
+  }
+
+  function renderContractsSelect() {
+    if (!newConvContract) return;
+    const current = newConvContract.value;
+    newConvContract.innerHTML =
+      '<option value="">no contract</option>' +
+      contractNames.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("");
+    if (current && contractNames.includes(current)) newConvContract.value = current;
   }
   newConvBtn.addEventListener("click", createConversation);
   newConvTitle.addEventListener("keydown", (e) => { if (e.key === "Enter") createConversation(); });
@@ -512,7 +529,8 @@
         mergeConversations([e.conversation]);
         if (e.conversation.channel === selectedChannel) renderConversationsPane();
         break;
-      case "conversation.closed": {
+      case "conversation.closed":
+      case "conversation.updated": {
         const existing = conversations.get(e.conversation.id);
         if (existing) Object.assign(existing, e.conversation);
         else mergeConversations([e.conversation]);
@@ -568,6 +586,9 @@
         if (e.needed === false && overlayMode === "wizard") closeOverlay();
         break;
       case "contracts.updated":
+        refreshContracts();
+        if (overlayMode === "settings") refreshSettings();
+        break;
       case "policy.updated":
         if (overlayMode === "settings") refreshSettings();
         break;
@@ -580,11 +601,22 @@
     if (!arr.some((x) => x.id === m.id)) arr.push(m);
   }
 
+  async function refreshContracts() {
+    try {
+      const list = await fetch("/api/contracts").then((r) => r.json());
+      contractNames = list.map((c) => c.name);
+      renderContractsSelect();
+    } catch {
+      /* best-effort */
+    }
+  }
+
   async function bootstrap() {
     const [agentsRes, channelsRes, approvalRes] = await Promise.all([
       fetch("/api/agents").then((r) => r.json()),
       fetch("/api/channels").then((r) => r.json()),
       fetch("/api/approval").then((r) => r.json()),
+      refreshContracts(),
     ]);
     for (const a of agentsRes) agents.set(a.name, a);
     for (const c of channelsRes) channels.set(c.name, { members: c.members || [], messageCount: c.messageCount });

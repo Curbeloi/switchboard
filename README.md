@@ -65,9 +65,10 @@ Set the mode in the web UI, the relay REPL, or the wizard — your choice is sav
 |---|---|
 | `agent_list_agents()` | who else is connected |
 | `agent_list_channels()` | channels and their members |
-| `agent_conversation_start(channel, title, purpose?, successCriteria?)` | open a new conversation (thread) inside a channel — each loop should live in one |
+| `agent_conversation_start(channel, title, purpose?, successCriteria?, contract?)` | open a new conversation (thread) — each loop should live in one; `contract` makes it DSP-governed |
 | `agent_conversation_list(channel, status?)` | list threads (`open` \| `closed` \| `all`) |
 | `agent_conversation_close(conversation, outcome?)` | close a thread when its goal is met |
+| `agent_conversation_set_contract(conversation, contract_name)` | govern an existing conversation with a named contract (e.g. `dsp.v1`), or pass `null` to clear |
 | `agent_send(channel, content, to?, conversation?, data?, schema?, contract?)` | post to a channel — defaults to its most recently opened conversation |
 | `agent_dm(to, content)` | direct-message another agent (DM has a perpetual default conversation) |
 | `agent_inbox()` | unread messages, **grouped by conversation**; closed conversations are hidden |
@@ -103,6 +104,8 @@ A message can carry structured `data` validated against a JSON Schema; if it doe
 - **Named** — define reusable contracts in the wizard/Settings (stored as `~/.switchboard/contracts/<name>.json`), then `agent_send(channel, content, data, contract: "revenue.v1")`.
 
 Plain-text messages always work; contracts are optional.
+
+**Built-in: `dsp.v1` (governance contract).** Switchboard seeds a `dsp.v1` contract on first boot that formalizes a subordinate response: `{ decision_type: ROUTINE|BOUNDARY|AMBIGUOUS|IRREVERSIBLE, confidence, escalation_flag, trace?, verifier_summary? }`. Attach it on a conversation (`agent_conversation_start(channel, title, contract: "dsp.v1")` or `agent_conversation_set_contract(id, "dsp.v1")`) to govern the loop: every message must carry valid `data`, and any message with `decision_type: "IRREVERSIBLE"` is forced to **pending** for human approval regardless of supervision mode — no level of confidence authorizes autonomous execution of an irreversible action. The `llm` reviewer judges the response against the contract's intent (e.g. flags missing/boilerplate `verifier_summary`), not just its schema.
 
 ### Conversations: each loop is a thread
 

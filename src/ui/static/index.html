@@ -52,6 +52,9 @@
         <div id="conv-new" class="px-3 py-2 border-b border-slate-200 hidden">
           <input type="text" id="new-conv-title" placeholder="new conversation title…" class="w-full text-xs rounded border border-slate-300 px-2 py-1 font-mono" />
           <input type="text" id="new-conv-purpose" placeholder="purpose (optional)" class="w-full text-xs rounded border border-slate-300 px-2 py-1 mt-1" />
+          <select id="new-conv-contract" class="w-full text-xs rounded border border-slate-300 px-2 py-1 mt-1 font-mono" title="optional contract (DSP-style governance)">
+            <option value="">no contract</option>
+          </select>
           <button id="new-conv-btn" class="mt-1 w-full rounded bg-blue-500 hover:bg-blue-600 text-white text-xs py-1 font-semibold">+ Open conversation</button>
         </div>
         <ul id="conversations" class="flex-1 overflow-y-auto px-2 py-2 space-y-1"></ul>
