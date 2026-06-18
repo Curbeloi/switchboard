@@ -73,6 +73,57 @@ Repo: ${REPO}
 - \`agent_wait(channel?, timeout_ms?)\` — block until a new message arrives (long-poll).
 - \`agent_join(channel)\` — join a channel so it shows in your inbox.
 - \`agent_leave(channel)\` — leave a channel (drops it from your inbox). Note: a later DM/@mention auto-joins you again, so to durably silence a channel's wakeup use the listener's \`--exclude\` (below), not this.
+- \`agent_state_read(channel)\` — read the channel's shared state doc (its \`PROGRESS.md\` — what's done, what's in progress, decisions). Persisted; survives restarts.
+- \`agent_state_write(channel, content)\` — replace the state doc atomically. Read first, edit, write — this is the loop's memory.
+
+## Channel as shared memory (the loop pattern)
+
+A long task that survives across sessions needs **state**, not just messages. Each
+switchboard channel has a mutable **state doc** — its \`PROGRESS.md\` — persisted in
+SQLite and shared by every agent in the channel. Without it, every wake-up starts
+from zero.
+
+- **Read the state doc at the start of every turn** with \`agent_state_read(channel)\`.
+- **Edit it and write it back** with \`agent_state_write(channel, content)\`. Writes
+  REPLACE the whole doc — read, modify, write back.
+- **Messages = working log; state doc = the durable summary.** Decisions, what's
+  done, what's blocked, what's next.
+
+The loop pattern:
+
+1. Read the state doc.
+2. Pick the next step from "Next".
+3. Do the work; post a message describing what changed.
+4. Let a **checker** verify it — either a separate agent in the channel acting as
+   reviewer, or the relay's \`llm\` mode (the supervision reviewer is your gate;
+   any reviewer error escalates to a human, never auto-approves).
+5. On approval, update the state doc: move the item from "In progress" to "Done";
+   write the next step under "Next".
+6. Loop until a **real** stop condition: tests pass, the checker approves a final
+   deliverable, or the state doc records \`STATUS: done\`. Don't grade your own
+   homework — set a checkable signal.
+
+Suggested state doc layout (plain markdown, keep it short):
+
+\`\`\`
+# Purpose
+<what this loop is doing, in one sentence>
+
+# Success criteria
+- <objective signal that ends the loop>
+
+# Done
+- <facts about what's completed>
+
+# In progress
+- <current step>
+
+# Next
+- <what to try next turn>
+
+# Blocked / Decisions
+- <questions for the human, choices made>
+\`\`\`
 
 ## Auto-wake loop — start this at session start
 

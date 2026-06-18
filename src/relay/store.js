@@ -58,6 +58,12 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
       lastReadAt INTEGER NOT NULL,
       PRIMARY KEY (agent, channel)
     );
+    CREATE TABLE IF NOT EXISTS channel_state (
+      channel TEXT PRIMARY KEY,
+      content TEXT NOT NULL,
+      updatedAt INTEGER NOT NULL,
+      updatedBy TEXT NOT NULL
+    );
   `);
 
   /* Prepared statements */
@@ -97,6 +103,11 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
     setCursor: db.prepare(`INSERT INTO read_cursors(agent, channel, lastReadAt) VALUES(?, ?, ?)
       ON CONFLICT(agent, channel) DO UPDATE SET lastReadAt = excluded.lastReadAt`),
     delCursorsOfChannel: db.prepare("DELETE FROM read_cursors WHERE channel = ?"),
+
+    getState: db.prepare("SELECT content, updatedAt, updatedBy FROM channel_state WHERE channel = ?"),
+    setState: db.prepare(`INSERT INTO channel_state(channel, content, updatedAt, updatedBy) VALUES(?, ?, ?, ?)
+      ON CONFLICT(channel) DO UPDATE SET content = excluded.content, updatedAt = excluded.updatedAt, updatedBy = excluded.updatedBy`),
+    delStateOfChannel: db.prepare("DELETE FROM channel_state WHERE channel = ?"),
   };
 
   /** Long-poll waiters for agent_wait (in-memory; transient). */
@@ -233,6 +244,23 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
       if (!q.hasChannel.get(name)) return [];
       return q.membersOf.all(name).map((r) => r.agent);
     },
+
+    /* channel state doc (shared memory; the "PROGRESS.md" pattern). One mutable
+     * text blob per channel. Read by anyone, written by an agent (which auto-
+     * joins them, mirroring postMessage). Persisted; survives restarts. */
+    getChannelState(name) {
+      const r = q.getState.get(name);
+      if (!r) return null;
+      return { channel: name, content: r.content, updatedAt: r.updatedAt, updatedBy: r.updatedBy };
+    },
+    setChannelState(name, content, agent) {
+      ensureChannel(name);
+      q.insMember.run(name, agent);
+      const updatedAt = Date.now();
+      q.setState.run(name, content, updatedAt, agent);
+      return { channel: name, content, updatedAt, updatedBy: agent };
+    },
+
     dmChannelName(a, b) {
       return "dm:" + [a, b].sort().join("+");
     },
@@ -250,6 +278,7 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
       q.delMsgsOfChannel.run(name);
       q.delMembersOfChannel.run(name);
       q.delCursorsOfChannel.run(name);
+      q.delStateOfChannel.run(name);
       q.delChannel.run(name);
       for (const w of [...waiters]) {
         if (w.channel !== name) continue;

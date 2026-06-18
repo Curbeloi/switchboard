@@ -118,6 +118,35 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     res.json(result);
   });
 
+  /* Channel state doc — the shared "PROGRESS.md" for a loop. Read is public
+   * (mirrors message reads); write requires a Bearer agent token and auto-joins
+   * the writer, mirroring postMessage. Caps at 64KB. */
+  api.get("/channels/:channel/state", (req, res) => {
+    const state = store.getChannelState(req.params.channel);
+    res.json(
+      state ?? { channel: req.params.channel, content: "", updatedAt: null, updatedBy: null }
+    );
+  });
+  api.put("/channels/:channel/state", (req, res) => {
+    const agent = requireAgent(req, res);
+    if (!agent) return;
+    const { content } = req.body ?? {};
+    if (typeof content !== "string") {
+      return res.status(400).json({ error: "content required (string)" });
+    }
+    if (content.length > 64 * 1024) {
+      return res.status(413).json({ error: "state doc exceeds 64KB cap" });
+    }
+    const state = store.setChannelState(req.params.channel, content, agent.name);
+    broadcast({
+      type: "channel.state.updated",
+      channel: state.channel,
+      updatedAt: state.updatedAt,
+      updatedBy: state.updatedBy,
+    });
+    res.json(state);
+  });
+
   /* Direct message: canonical 2-member channel, both sides auto-joined. */
   api.post("/dm", (req, res) => {
     const agent = requireAgent(req, res);

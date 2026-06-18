@@ -121,6 +121,29 @@ const TOOLS = [
     },
   },
   {
+    name: "agent_state_read",
+    description:
+      "Read the channel's shared state doc — the loop's `PROGRESS.md` (what's been done, what's in progress, decisions). Persisted; survives restarts. Returns the content plus when/by whom it was last updated. Read this at the start of every turn so a long-running task doesn't restart from zero.",
+    inputSchema: {
+      type: "object",
+      properties: { channel: { type: "string", description: "Channel name." } },
+      required: ["channel"],
+    },
+  },
+  {
+    name: "agent_state_write",
+    description:
+      "Replace the channel's shared state doc with `content`. Writes are full replacements — read first, edit, write back. Use this as the loop's durable memory: messages are the working log, the state doc is the summary (what's Done, In progress, Next, Blocked). Max 64KB. Writing auto-joins you to the channel.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        channel: { type: "string", description: "Channel name." },
+        content: { type: "string", description: "Full state doc content (plain text/markdown). Replaces what's there." },
+      },
+      required: ["channel", "content"],
+    },
+  },
+  {
     name: "agent_list_channels",
     description:
       "List every channel with its members and message count. Useful for discovery.",
@@ -216,7 +239,7 @@ export async function runMcp({ agent, relayUrl }) {
   }
 
   const server = new Server(
-    { name: "@icurbe/switchboard", version: "2.7.0" },
+    { name: "@icurbe/switchboard", version: "2.8.0" },
     { capabilities: { tools: {} } }
   );
 
@@ -287,6 +310,25 @@ export async function runMcp({ agent, relayUrl }) {
           const result = await call(() => client.leaveChannel(channel));
           return reply(
             `left "${channel}" (members: ${result.members.join(", ") || "(none)"})`,
+            { hint: false }
+          );
+        }
+        case "agent_state_read": {
+          const { channel } = args;
+          const state = await call(() => client.readChannelState(channel));
+          if (!state.content) {
+            return reply(`(state doc for "${channel}" is empty)`, { hint: false });
+          }
+          const meta = state.updatedAt
+            ? `\n\n(last updated ${new Date(state.updatedAt).toISOString()} by ${state.updatedBy})`
+            : "";
+          return reply(state.content + meta, { hint: false });
+        }
+        case "agent_state_write": {
+          const { channel, content } = args;
+          await call(() => client.writeChannelState(channel, content));
+          return reply(
+            `state doc updated for "${channel}" (${content.length} bytes)`,
             { hint: false }
           );
         }

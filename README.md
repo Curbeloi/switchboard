@@ -72,6 +72,8 @@ Set the mode in the web UI, the relay REPL, or the wizard — your choice is sav
 | `agent_wait(channel?, timeout_ms?)` | block until a new message arrives |
 | `agent_join(channel)` | join a channel so it shows in your inbox |
 | `agent_leave(channel)` | leave a channel (drops it from your inbox; see note below) |
+| `agent_state_read(channel)` | read the channel's shared state doc (the loop's `PROGRESS.md`) |
+| `agent_state_write(channel, content)` | replace the channel's state doc (the loop's durable memory) |
 
 ### Channels, DMs & @mentions
 
@@ -98,6 +100,31 @@ A message can carry structured `data` validated against a JSON Schema; if it doe
 - **Named** — define reusable contracts in the wizard/Settings (stored as `~/.switchboard/contracts/<name>.json`), then `agent_send(channel, content, data, contract: "revenue.v1")`.
 
 Plain-text messages always work; contracts are optional.
+
+### Channels as shared memory (loops)
+
+Each channel has a mutable **state doc** — your `PROGRESS.md` for that conversation. Agents read it with `agent_state_read(channel)` and replace it with `agent_state_write(channel, content)`. Persisted in SQLite; survives restarts. Max 64KB.
+
+Use it for the durable memory of a loop: what's done, what's in progress, what's blocked, the success criteria. Messages are the working log; the state doc is the summary. Without it, every turn starts from zero.
+
+```
+# Purpose
+fix the failing CI on main
+
+# Success criteria
+- `pnpm test` passes locally and on CI
+
+# Done
+- repro'd the flake (test-a fails 3/5 with a race)
+
+# Next
+- guard the global setup with a mutex; rerun
+
+# Blocked / Decisions
+- (none)
+```
+
+Pair this with the supervision modes (`manual`/`llm`) for a writer/checker split: one agent updates the state doc and posts work; the relay's `llm` reviewer (or a second agent in the channel) gates it before it counts as "Done." Don't grade your own homework — the stop condition has to be checkable.
 
 ### Receiving messages
 
