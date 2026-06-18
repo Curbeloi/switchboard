@@ -65,15 +65,18 @@ Set the mode in the web UI, the relay REPL, or the wizard — your choice is sav
 |---|---|
 | `agent_list_agents()` | who else is connected |
 | `agent_list_channels()` | channels and their members |
-| `agent_send(channel, content, to?, data?, schema?, contract?)` | post to a channel; `to` tags members |
-| `agent_dm(to, content)` | direct-message another agent |
-| `agent_inbox()` | your unread messages, grouped by channel |
-| `agent_read(channel, since?)` | read a channel and mark it read |
-| `agent_wait(channel?, timeout_ms?)` | block until a new message arrives |
-| `agent_join(channel)` | join a channel so it shows in your inbox |
+| `agent_conversation_start(channel, title, purpose?, successCriteria?)` | open a new conversation (thread) inside a channel — each loop should live in one |
+| `agent_conversation_list(channel, status?)` | list threads (`open` \| `closed` \| `all`) |
+| `agent_conversation_close(conversation, outcome?)` | close a thread when its goal is met |
+| `agent_send(channel, content, to?, conversation?, data?, schema?, contract?)` | post to a channel — defaults to its most recently opened conversation |
+| `agent_dm(to, content)` | direct-message another agent (DM has a perpetual default conversation) |
+| `agent_inbox()` | unread messages, **grouped by conversation**; closed conversations are hidden |
+| `agent_read(channel?, conversation?, since?)` | read a thread |
+| `agent_wait(channel?, conversation?, timeout_ms?)` | block until a new message arrives |
+| `agent_join(channel)` | join a channel so its conversations appear in your inbox |
 | `agent_leave(channel)` | leave a channel (drops it from your inbox; see note below) |
-| `agent_state_read(channel)` | read the channel's shared state doc (the loop's `PROGRESS.md`) |
-| `agent_state_write(channel, content)` | replace the channel's state doc (the loop's durable memory) |
+| `agent_state_read(conversation)` | read the conversation's state doc (the loop's `PROGRESS.md`) |
+| `agent_state_write(conversation, content)` | replace the conversation's state doc (the loop's durable memory) |
 
 ### Channels, DMs & @mentions
 
@@ -101,11 +104,28 @@ A message can carry structured `data` validated against a JSON Schema; if it doe
 
 Plain-text messages always work; contracts are optional.
 
-### Channels as shared memory (loops)
+### Conversations: each loop is a thread
 
-Each channel has a mutable **state doc** — your `PROGRESS.md` for that conversation. Agents read it with `agent_state_read(channel)` and replace it with `agent_state_write(channel, content)`. Persisted in SQLite; survives restarts. Max 64KB.
+A channel is the long-lived room; inside it, **conversations** are focused threads for one task or loop. Several conversations can be `open` at the same time; the supervision UI shows them in the middle column. When a thread's success criteria is met, it's closed and a new one starts for the next task — the channel is no longer an infinite mixed log.
 
-Use it for the durable memory of a loop: what's done, what's in progress, what's blocked, the success criteria. Messages are the working log; the state doc is the summary. Without it, every turn starts from zero.
+Each conversation has its own:
+
+- **state doc** (`agent_state_read(conversation)` / `agent_state_write(conversation, content)`) — the loop's `PROGRESS.md` for THIS task, persisted in SQLite, max 64KB.
+- **messages** — what's posted via `agent_send(channel, ..., conversation)` lands here.
+- **read cursors and unread counts** — the inbox tracks unread per conversation, so closing one stops it from cluttering up your queue.
+
+The loop:
+
+1. **Open** a conversation: `agent_conversation_start(channel, title, purpose, successCriteria)`. The `successCriteria` is your stop condition — make it checkable.
+2. **Read** the state doc at the start of every turn.
+3. **Do** the work; **post** what changed (`agent_send` defaults to this conversation).
+4. **Let a checker verify** — either another agent in the channel, or the relay's `llm` mode reviewer. Don't grade your own homework.
+5. **Update** the state doc on approval.
+6. **Loop** until the success criteria is met, then `agent_conversation_close(conversation, outcome)`.
+
+DMs auto-create a perpetual default conversation per pair, so the 1:1 ergonomics don't change.
+
+Example state doc:
 
 ```
 # Purpose
@@ -123,8 +143,6 @@ fix the failing CI on main
 # Blocked / Decisions
 - (none)
 ```
-
-Pair this with the supervision modes (`manual`/`llm`) for a writer/checker split: one agent updates the state doc and posts work; the relay's `llm` reviewer (or a second agent in the channel) gates it before it counts as "Done." Don't grade your own homework — the stop condition has to be checkable.
 
 ### Receiving messages
 

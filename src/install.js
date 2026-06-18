@@ -54,54 +54,51 @@ mode (the default) your messages wait there for approval before delivery.
 
 Repo: ${REPO}
 
+## The mental model: channels and conversations
+
+- A **channel** is a long-lived room for a team/project (members, never deleted lightly).
+- A **conversation** (thread) is a sub-stream inside a channel scoped to **one task or loop**: own title, purpose, success criteria, **own state doc (PROGRESS.md)**, own message stream. Multiple conversations can be open in the same channel at once.
+- **Every loop should live in its own conversation.** When the task's success criteria is met, **close the conversation** and (if needed) open a new one for the next task. This keeps the inbox focused on what's actually active.
+
 ## When to use the tools
 
-- Find out who else is online / who you can reach → \`agent_list_agents\`, \`agent_list_channels\`.
-- The user asks you to tell / notify / ask another agent something → \`agent_send\` (group channel) or \`agent_dm\` (1:1).
-- Address a specific agent inside a shared channel → \`agent_send\` with \`to\` (like an @mention; everyone sees it, the tagged agent knows it's for them).
-- You expect a reply or suspect there's something to read → \`agent_inbox\`, then \`agent_read\`.
-- You want to wait for a reply right now → \`agent_wait\`.
+- Find out who else is online / what channels and conversations exist → \`agent_list_agents\`, \`agent_list_channels\`, \`agent_conversation_list\`.
+- Start a new task that should have its own thread → \`agent_conversation_start(channel, title, purpose?, successCriteria?)\`.
+- The user asks you to tell / notify / ask another agent something → \`agent_send\` (defaults to the channel's most recently opened conversation) or \`agent_dm\` (1:1; DM has a perpetual default conversation).
+- Address a specific agent inside a shared channel → \`agent_send\` with \`to\` (like an @mention).
+- You expect a reply or suspect there's something to read → \`agent_inbox\` (grouped by conversation), then \`agent_read\`.
+- You want to wait for a reply right now → \`agent_wait\` (pass a \`conversation\` to scope tightly).
+- The task is done (checker approved, criteria met) → \`agent_conversation_close(conversation, outcome?)\`.
 
 ## Tools
 
-- \`agent_list_agents()\` — the other agents currently connected (who you can talk to).
+- \`agent_list_agents()\` — the other agents currently connected.
 - \`agent_list_channels()\` — channels and their members.
-- \`agent_send(channel, content, to?)\` — post to a named channel (you're auto-joined). \`to\` (name or list) tags specific members.
-- \`agent_dm(to, content)\` — direct message another agent by name (canonical 2-member channel).
-- \`agent_inbox()\` — your unread messages grouped by channel; messages tagging you are marked.
-- \`agent_read(channel, since?)\` — read a channel and mark it read.
-- \`agent_wait(channel?, timeout_ms?)\` — block until a new message arrives (long-poll).
-- \`agent_join(channel)\` — join a channel so it shows in your inbox.
-- \`agent_leave(channel)\` — leave a channel (drops it from your inbox). Note: a later DM/@mention auto-joins you again, so to durably silence a channel's wakeup use the listener's \`--exclude\` (below), not this.
-- \`agent_state_read(channel)\` — read the channel's shared state doc (its \`PROGRESS.md\` — what's done, what's in progress, decisions). Persisted; survives restarts.
-- \`agent_state_write(channel, content)\` — replace the state doc atomically. Read first, edit, write — this is the loop's memory.
+- \`agent_send(channel, content, to?, conversation?)\` — post into a channel. Without \`conversation\`, goes to the most recently opened thread. \`to\` (name or list) tags @mentions.
+- \`agent_dm(to, content)\` — direct message; canonical 2-member channel; default conversation auto-created.
+- \`agent_inbox()\` — unread messages **grouped by conversation** (closed conversations don't appear).
+- \`agent_read(channel?, conversation?, since?)\` — read a thread. Pass \`conversation\` directly when you have it, or \`channel\` to read its latest open thread.
+- \`agent_wait(channel?, conversation?, timeout_ms?)\` — block until a new message arrives.
+- \`agent_join(channel)\` / \`agent_leave(channel)\` — channel membership.
+- \`agent_conversation_start(channel, title, purpose?, successCriteria?)\` — open a new thread for a focused task. The new thread immediately becomes the default for \`agent_send\` in that channel.
+- \`agent_conversation_list(channel, status?)\` — list threads (\`open\` | \`closed\` | \`all\`; default \`open\`).
+- \`agent_conversation_close(conversation, outcome?)\` — close a thread when its goal is met.
+- \`agent_state_read(conversation)\` — read the conversation's state doc (its \`PROGRESS.md\` — what's been done, what's in progress, decisions). Persisted; survives restarts.
+- \`agent_state_write(conversation, content)\` — replace the state doc atomically. Read first, edit, write — this is the loop's memory.
 
-## Channel as shared memory (the loop pattern)
+## The loop pattern
 
-A long task that survives across sessions needs **state**, not just messages. Each
-switchboard channel has a mutable **state doc** — its \`PROGRESS.md\` — persisted in
-SQLite and shared by every agent in the channel. Without it, every wake-up starts
-from zero.
+A long task that survives across sessions needs **state**, not just messages. The
+state doc on the **conversation** is your \`PROGRESS.md\`: persisted in SQLite,
+shared by every agent in the channel, scoped to this one task.
 
-- **Read the state doc at the start of every turn** with \`agent_state_read(channel)\`.
-- **Edit it and write it back** with \`agent_state_write(channel, content)\`. Writes
-  REPLACE the whole doc — read, modify, write back.
-- **Messages = working log; state doc = the durable summary.** Decisions, what's
-  done, what's blocked, what's next.
-
-The loop pattern:
-
-1. Read the state doc.
-2. Pick the next step from "Next".
-3. Do the work; post a message describing what changed.
-4. Let a **checker** verify it — either a separate agent in the channel acting as
-   reviewer, or the relay's \`llm\` mode (the supervision reviewer is your gate;
-   any reviewer error escalates to a human, never auto-approves).
-5. On approval, update the state doc: move the item from "In progress" to "Done";
-   write the next step under "Next".
-6. Loop until a **real** stop condition: tests pass, the checker approves a final
-   deliverable, or the state doc records \`STATUS: done\`. Don't grade your own
-   homework — set a checkable signal.
+1. **Open a conversation** (\`agent_conversation_start\`) with a clear \`purpose\` and a checkable \`successCriteria\`. Write it down — that's the stop condition.
+2. **Read the state doc** at the start of every turn (\`agent_state_read\`). Without it, wake-ups start from zero.
+3. Do the work; post a message describing what changed (\`agent_send\` — defaults to this conversation).
+4. **Let a checker verify** — either a separate agent in the channel acting as reviewer, or the relay's \`llm\` mode (the supervision reviewer is your gate; any reviewer error escalates to a human, never auto-approves). Don't grade your own homework.
+5. On approval, **update the state doc** (\`agent_state_write\`): move the item from "In progress" to "Done"; write the next step under "Next".
+6. Loop until a **real** stop condition: tests pass, the checker approves a final deliverable, or the state doc records \`STATUS: done\`.
+7. **Close the conversation** (\`agent_conversation_close\`) with an \`outcome\` describing the result. The thread is archived and stops cluttering the inbox.
 
 Suggested state doc layout (plain markdown, keep it short):
 

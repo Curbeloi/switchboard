@@ -4,50 +4,90 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>switchboard — supervision</title>
+    <link rel="stylesheet" href="tailwind.css" />
     <link rel="stylesheet" href="style.css" />
   </head>
-  <body>
-    <header>
-      <h1>switchboard</h1>
-      <div class="controls">
-        <label class="mode-control">
-          <span>Mode</span>
-          <select id="mode-select">
+  <body class="h-screen bg-slate-50 text-slate-700 font-sans flex flex-col overflow-hidden">
+    <header class="h-12 flex-shrink-0 border-b border-slate-200 bg-white px-4 flex items-center justify-between">
+      <h1 class="text-base font-semibold tracking-wide text-slate-900">switchboard</h1>
+      <div class="flex items-center gap-3">
+        <label class="text-xs text-slate-500 flex items-center gap-1.5">
+          Mode
+          <select id="mode-select" class="text-sm rounded border border-slate-300 bg-white px-2 py-1 font-mono">
             <option value="manual">manual</option>
             <option value="auto">auto</option>
             <option value="llm" id="mode-llm">llm</option>
           </select>
         </label>
-        <button id="settings-btn" class="settings-btn" title="Contracts & policy">⚙ Settings</button>
-        <span id="status" class="status status-connecting">connecting…</span>
+        <button id="settings-btn" class="text-sm rounded border border-slate-300 bg-white px-2.5 py-1 hover:border-blue-500 hover:text-blue-600" title="Settings">⚙ Settings</button>
+        <span id="status" class="text-xs px-2.5 py-1 rounded-full bg-slate-200 text-slate-600 font-mono">connecting…</span>
       </div>
     </header>
 
     <div id="overlay" class="overlay" hidden></div>
 
-    <main>
-      <aside id="sidebar">
-        <h2>Agents</h2>
-        <ul id="agents"><li class="muted">no agents yet</li></ul>
-        <h2>Channels</h2>
-        <ul id="channels"><li class="muted">no channels yet</li></ul>
-        <div id="new-channel" class="new-channel">
-          <input type="text" id="new-channel-name" placeholder="new channel…" />
-          <button id="new-channel-btn" title="create channel">+</button>
-        </div>
+    <main class="flex-1 flex min-h-0">
+      <!-- Col 1: channels + agents -->
+      <aside class="w-56 flex-shrink-0 border-r border-slate-200 bg-white overflow-y-auto flex flex-col">
+        <section class="p-3">
+          <h2 class="text-[10px] uppercase tracking-wider font-semibold text-slate-500 mb-2">Channels</h2>
+          <ul id="channels" class="space-y-0.5"><li class="text-xs text-slate-400 italic px-2">no channels yet</li></ul>
+          <div id="new-channel" class="flex gap-1 mt-2">
+            <input type="text" id="new-channel-name" placeholder="new channel…" class="flex-1 min-w-0 text-xs rounded border border-slate-300 px-2 py-1 font-mono" />
+            <button id="new-channel-btn" class="px-2 rounded bg-slate-200 hover:bg-blue-500 hover:text-white text-sm" title="create channel">+</button>
+          </div>
+        </section>
+        <section class="p-3 border-t border-slate-200">
+          <h2 class="text-[10px] uppercase tracking-wider font-semibold text-slate-500 mb-2">Agents</h2>
+          <ul id="agents" class="space-y-0.5"><li class="text-xs text-slate-400 italic px-2">no agents yet</li></ul>
+        </section>
       </aside>
 
-      <section id="feed">
-        <div id="channel-header">
-          <h2 id="channel-title">Select a channel</h2>
-          <div id="channel-meta" class="muted"></div>
+      <!-- Col 2: conversations of selected channel -->
+      <aside class="w-72 flex-shrink-0 border-r border-slate-200 bg-white flex flex-col overflow-hidden">
+        <div id="conv-header" class="px-3 py-2 border-b border-slate-200">
+          <h2 id="conv-channel-name" class="font-mono text-sm text-slate-700">—</h2>
+          <p id="conv-channel-meta" class="text-[11px] text-slate-400 font-mono mt-0.5">select a channel</p>
+        </div>
+        <div id="conv-new" class="px-3 py-2 border-b border-slate-200 hidden">
+          <input type="text" id="new-conv-title" placeholder="new conversation title…" class="w-full text-xs rounded border border-slate-300 px-2 py-1 font-mono" />
+          <input type="text" id="new-conv-purpose" placeholder="purpose (optional)" class="w-full text-xs rounded border border-slate-300 px-2 py-1 mt-1" />
+          <button id="new-conv-btn" class="mt-1 w-full rounded bg-blue-500 hover:bg-blue-600 text-white text-xs py-1 font-semibold">+ Open conversation</button>
+        </div>
+        <ul id="conversations" class="flex-1 overflow-y-auto px-2 py-2 space-y-1"></ul>
+      </aside>
+
+      <!-- Col 3: messages of selected conversation -->
+      <section id="feed" class="flex-1 flex flex-col overflow-hidden bg-slate-50">
+        <div id="msg-header" class="px-4 py-2 border-b border-slate-200 bg-white">
+          <div class="flex items-center justify-between gap-2">
+            <h2 id="conv-title" class="font-mono text-base text-slate-900">Select a conversation</h2>
+            <div class="flex items-center gap-1">
+              <button id="state-toggle" class="hidden text-xs px-2 py-1 rounded border border-slate-300 text-slate-600 hover:border-blue-500 hover:text-blue-600" type="button">state doc</button>
+              <button id="close-conv-btn" class="hidden text-xs px-2 py-1 rounded border border-slate-300 text-slate-600 hover:border-red-400 hover:text-red-600" type="button">close conv</button>
+            </div>
+          </div>
+          <p id="conv-meta" class="text-[11px] text-slate-400 font-mono mt-0.5"></p>
         </div>
 
-        <h3 id="pending-heading" hidden>Pending approval</h3>
-        <ul id="pending"></ul>
+        <div id="state-pane" class="hidden border-b border-slate-200 bg-white p-3">
+          <div class="flex items-center justify-between mb-1">
+            <h3 class="text-[10px] uppercase tracking-wider font-semibold text-slate-500">State doc (PROGRESS.md)</h3>
+            <span id="state-meta" class="text-[11px] text-slate-400 font-mono"></span>
+          </div>
+          <textarea id="state-textarea" class="w-full font-mono text-xs rounded border border-slate-300 px-2 py-2" rows="10" placeholder="# Purpose&#10;...&#10;&#10;# Success criteria&#10;...&#10;&#10;# Done / In progress / Next / Blocked"></textarea>
+          <div class="mt-1 flex gap-2 items-center">
+            <button id="state-save" class="rounded bg-blue-500 hover:bg-blue-600 text-white text-xs px-3 py-1 font-semibold">Save</button>
+            <span id="state-msg" class="text-[11px] text-slate-500"></span>
+          </div>
+        </div>
 
-        <ul id="messages"></ul>
-        <p id="empty-hint" class="muted">Pick a channel on the left to see its conversation.</p>
+        <div id="msg-scroll" class="flex-1 overflow-y-auto p-4">
+          <h3 id="pending-heading" class="text-[10px] uppercase tracking-wider font-semibold text-amber-600 mb-2" hidden>Pending approval</h3>
+          <ul id="pending" class="space-y-2 mb-4"></ul>
+          <ul id="messages" class="space-y-2"></ul>
+          <p id="empty-hint" class="text-sm text-slate-400 italic">Pick a channel on the left, then a conversation in the middle.</p>
+        </div>
       </section>
     </main>
 

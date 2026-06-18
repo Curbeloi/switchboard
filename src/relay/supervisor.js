@@ -1,22 +1,25 @@
 import * as readline from "node:readline";
 
 const HELP = `commands:
-  approve <id>     deliver a pending message (id can be a prefix; 'all' approves every pending)
-  reject  <id>     drop a pending message
-  list             show pending messages
-  agents           list connected agents
-  channels         list channels with members and message counts
-  members <chan>   show the members of a channel
+  approve <id>        deliver a pending message (id can be a prefix; 'all' approves every pending)
+  reject  <id>        drop a pending message
+  list                show pending messages
+  agents              list connected agents
+  channels            list channels with members and message counts
+  members <chan>      show the members of a channel
   addto <agent> <chan> [chan...]      add an agent to one or more channels
   removefrom <agent> <chan> [chan...] remove an agent from one or more channels
   createchan <name>   create an empty channel
-  delchan <name>      delete a channel (and its messages)
-  manual           supervision mode: every message waits for your approval (default)
-  auto             supervision mode: deliver everything, no supervision
-  llm              supervision mode: an LLM reviewer approves/rejects/escalates (needs a reviewer)
-  status           show current mode, reviewer, and pending count
-  help             show this help
-  quit             stop the relay
+  delchan <name>      delete a channel (and its conversations + messages)
+  conversations <chan> [open|closed|all]   list conversations in a channel (default: open)
+  openconv <chan> <title>                  open a new conversation in a channel
+  closeconv <id-prefix> [outcome words...]  close a conversation by id prefix
+  manual              supervision mode: every message waits for your approval (default)
+  auto                supervision mode: deliver everything, no supervision
+  llm                 supervision mode: an LLM reviewer approves/rejects/escalates (needs a reviewer)
+  status              show current mode, reviewer, and pending count
+  help                show this help
+  quit                stop the relay
 `;
 
 function preview(text, n) {
@@ -51,14 +54,14 @@ export function startConsoleSupervisor({ store, broadcast, reviewer = null, conf
     if (event.type === "message.pending") {
       const m = event.message;
       notify(
-        `[PENDING ${m.id.slice(0, 8)}] ${m.from} → ${m.channel}\n  ${preview(m.content, 200).replace(/\n/g, "\n  ")}`
+        `[PENDING ${m.id.slice(0, 8)}] ${m.from} → ${m.channel}/${m.conversationId.slice(0, 8)}\n  ${preview(m.content, 200).replace(/\n/g, "\n  ")}`
       );
       return;
     }
     if (event.type === "message.escalated") {
       const m = event.message;
       notify(
-        `[ESCALATED ${m.id.slice(0, 8)}] ${m.from} → ${m.channel} — reviewer: ${m.review?.reason ?? "needs a human"}\n  approve/reject it`
+        `[ESCALATED ${m.id.slice(0, 8)}] ${m.from} → ${m.channel}/${m.conversationId.slice(0, 8)} — reviewer: ${m.review?.reason ?? "needs a human"}\n  approve/reject it`
       );
       return;
     }
@@ -66,10 +69,33 @@ export function startConsoleSupervisor({ store, broadcast, reviewer = null, conf
       notify(`mode → ${event.mode}`);
       return;
     }
+    if (event.type === "conversation.created") {
+      const c = event.conversation;
+      notify(`conversation opened: "${c.title}" (${c.id.slice(0, 8)}) in ${c.channel}`);
+      return;
+    }
+    if (event.type === "conversation.closed") {
+      const c = event.conversation;
+      notify(
+        `conversation closed: "${c.title}" (${c.id.slice(0, 8)}) in ${c.channel}${c.closedOutcome ? ` — ${c.closedOutcome}` : ""}`
+      );
+      return;
+    }
   }
 
   function findByPrefix(prefix) {
     return store.listPending().filter((m) => m.id.startsWith(prefix));
+  }
+  function findConvByPrefix(prefix) {
+    // Search all channels for conversations starting with this id prefix.
+    const channels = store.listChannels();
+    const out = [];
+    for (const ch of channels) {
+      for (const c of store.listConversations(ch.name)) {
+        if (c.id.startsWith(prefix)) out.push(c);
+      }
+    }
+    return out;
   }
 
   function approveOne(id) {
@@ -103,7 +129,7 @@ export function startConsoleSupervisor({ store, broadcast, reviewer = null, conf
         }
         for (const m of pending) {
           process.stdout.write(
-            `  ${m.id.slice(0, 8)}  ${m.from} → ${m.channel}: ${preview(m.content, 80)}\n`
+            `  ${m.id.slice(0, 8)}  ${m.from} → ${m.channel}/${m.conversationId.slice(0, 8)}: ${preview(m.content, 80)}\n`
           );
         }
         return;
@@ -259,6 +285,68 @@ export function startConsoleSupervisor({ store, broadcast, reviewer = null, conf
         }
         broadcast({ type: "channel.deleted", name });
         process.stdout.write(`deleted channel "${name}"\n`);
+        return;
+      }
+
+      case "conversations":
+      case "convs": {
+        const [chan, statusArg] = args;
+        if (!chan) {
+          process.stdout.write("usage: conversations <channel> [open|closed|all]\n");
+          return;
+        }
+        const status = statusArg && statusArg !== "all" ? statusArg : null;
+        const list = store.listConversations(chan, status);
+        if (list.length === 0) {
+          process.stdout.write(`no ${statusArg ?? "open"} conversations in "${chan}"\n`);
+          return;
+        }
+        for (const c of list) {
+          const closed = c.status === "closed" && c.closedOutcome ? ` → ${c.closedOutcome}` : "";
+          process.stdout.write(
+            `  ${c.id.slice(0, 8)}  [${c.status}]  ${c.title}${closed}\n`
+          );
+        }
+        return;
+      }
+
+      case "openconv": {
+        const chan = args[0];
+        const title = args.slice(1).join(" ");
+        if (!chan || !title) {
+          process.stdout.write("usage: openconv <channel> <title>\n");
+          return;
+        }
+        const conv = store.createConversation({ channel: chan, title, createdBy: "supervisor" });
+        broadcast({ type: "conversation.created", conversation: conv });
+        process.stdout.write(`opened "${title}" (${conv.id.slice(0, 8)}) in ${chan}\n`);
+        return;
+      }
+
+      case "closeconv": {
+        const prefix = args[0];
+        const outcome = args.slice(1).join(" ") || null;
+        if (!prefix) {
+          process.stdout.write("usage: closeconv <id-prefix> [outcome...]\n");
+          return;
+        }
+        const matches = findConvByPrefix(prefix);
+        if (matches.length === 0) {
+          process.stdout.write(`no conversation with id starting "${prefix}"\n`);
+          return;
+        }
+        if (matches.length > 1) {
+          process.stdout.write(`ambiguous prefix "${prefix}" — ${matches.length} matches\n`);
+          return;
+        }
+        const open = matches[0].status === "open";
+        if (!open) {
+          process.stdout.write(`conversation already closed\n`);
+          return;
+        }
+        const conv = store.closeConversation(matches[0].id, { closedBy: "supervisor", outcome });
+        broadcast({ type: "conversation.closed", conversation: conv });
+        process.stdout.write(`closed "${conv.title}" (${conv.id.slice(0, 8)})${outcome ? ` — ${outcome}` : ""}\n`);
         return;
       }
 

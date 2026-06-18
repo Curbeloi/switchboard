@@ -32,23 +32,46 @@ export function createRelayClient(relayUrl, token = null) {
         body: JSON.stringify(existingToken ? { name, token: existingToken } : { name }),
       });
     },
+
+    /* channels */
     joinChannel(channel) {
       return request(`/api/channels/${encodeURIComponent(channel)}/join`, { method: "POST" });
     },
     leaveChannel(channel) {
       return request(`/api/channels/${encodeURIComponent(channel)}/leave`, { method: "POST" });
     },
-    readChannelState(channel) {
-      return request(`/api/channels/${encodeURIComponent(channel)}/state`);
+    listChannels() {
+      return request("/api/channels");
     },
-    writeChannelState(channel, content) {
-      return request(`/api/channels/${encodeURIComponent(channel)}/state`, {
-        method: "PUT",
-        body: JSON.stringify({ content }),
+
+    /* conversations (threads inside a channel) */
+    createConversation(channel, { title, purpose, successCriteria } = {}) {
+      const body = { title };
+      if (purpose != null) body.purpose = purpose;
+      if (successCriteria != null) body.successCriteria = successCriteria;
+      return request(`/api/channels/${encodeURIComponent(channel)}/conversations`, {
+        method: "POST",
+        body: JSON.stringify(body),
       });
     },
-    postMessage({ channel, content, to, data, schema, contract }) {
+    listConversations(channel, status = null) {
+      const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+      return request(`/api/channels/${encodeURIComponent(channel)}/conversations${qs}`);
+    },
+    getConversation(id) {
+      return request(`/api/conversations/${encodeURIComponent(id)}`);
+    },
+    closeConversation(id, outcome = null) {
+      return request(`/api/conversations/${encodeURIComponent(id)}/close`, {
+        method: "POST",
+        body: JSON.stringify(outcome != null ? { outcome } : {}),
+      });
+    },
+
+    /* messages */
+    postMessage({ channel, conversation, content, to, data, schema, contract }) {
       const body = { content };
+      if (conversation) body.conversation = conversation;
       if (to && to.length) body.to = to;
       if (data != null) body.data = data;
       if (schema != null) body.schema = schema;
@@ -64,21 +87,32 @@ export function createRelayClient(relayUrl, token = null) {
         body: JSON.stringify({ to, content }),
       });
     },
-    readMessages({ channel, since = 0 }) {
+    readConversationMessages({ conversationId, since = 0 }) {
       const qs = new URLSearchParams({ since: String(since) });
-      return request(`/api/channels/${encodeURIComponent(channel)}/messages?${qs}`);
+      return request(`/api/conversations/${encodeURIComponent(conversationId)}/messages?${qs}`);
     },
-    listChannels() {
-      return request("/api/channels");
+
+    /* conversation state doc */
+    readConversationState(conversationId) {
+      return request(`/api/conversations/${encodeURIComponent(conversationId)}/state`);
     },
+    writeConversationState(conversationId, content) {
+      return request(`/api/conversations/${encodeURIComponent(conversationId)}/state`, {
+        method: "PUT",
+        body: JSON.stringify({ content }),
+      });
+    },
+
+    /* inbox + wait */
     listAgents() {
       return request("/api/agents");
     },
     inbox() {
       return request("/api/inbox");
     },
-    wait({ channel = null, timeoutMs = 25000 } = {}) {
+    wait({ channel = null, conversation = null, timeoutMs = 25000 } = {}) {
       const qs = new URLSearchParams({ timeout_ms: String(timeoutMs) });
+      if (conversation) qs.set("conversation", conversation);
       if (channel) qs.set("channel", channel);
       return request(`/api/wait?${qs}`);
     },

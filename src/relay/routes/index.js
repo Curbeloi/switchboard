@@ -23,13 +23,11 @@ const publicAgent = (a) => ({
   lastSeenAt: a.lastSeenAt,
 });
 
+const STATE_MAX_BYTES = 64 * 1024;
+
 export function mountRoutes(app, { store, broadcast, reviewer = null, config = null }) {
   const api = Router();
   const reviewerAvailable = Boolean(reviewer?.available);
-
-  /** Resolve the calling agent from its token. Sends 401 and returns null
-   *  when missing/invalid. Token may arrive as `Authorization: Bearer <t>`
-   *  or `x-switchboard-token: <t>`. */
   const reviewerInfo = { available: reviewerAvailable, backend: reviewer?.backend ?? null };
 
   function requireAgent(req, res) {
@@ -45,8 +43,6 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     return agent;
   }
 
-  /** Like requireAgent but optional — returns the agent or null without erroring.
-   *  Used by read-only routes that local human surfaces (web UI) may call. */
   function optionalAgent(req) {
     const auth = req.get("authorization");
     const token =
@@ -73,7 +69,6 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
         .json({ error: `agent "${name}" already registered; provide its token to re-register` });
     }
     broadcast({ type: "agent.registered", agent: publicAgent(agent) });
-    // The token is returned ONLY here, to the registering caller.
     res.json({ name: agent.name, token: agent.token, registeredAt: agent.registeredAt });
   });
   api.get("/agents", (_req, res) => res.json(store.listAgents()));
@@ -81,7 +76,6 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
   /* Channels */
   api.get("/channels", (_req, res) => res.json(store.listChannels()));
 
-  /* Create / delete a whole channel (human supervisor — no agent token). */
   api.post("/channels", (req, res) => {
     const { name } = req.body ?? {};
     if (!name || typeof name !== "string") {
@@ -118,36 +112,113 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     res.json(result);
   });
 
-  /* Channel state doc — the shared "PROGRESS.md" for a loop. Read is public
-   * (mirrors message reads); write requires a Bearer agent token and auto-joins
-   * the writer, mirroring postMessage. Caps at 64KB. */
-  api.get("/channels/:channel/state", (req, res) => {
-    const state = store.getChannelState(req.params.channel);
-    res.json(
-      state ?? { channel: req.params.channel, content: "", updatedAt: null, updatedBy: null }
-    );
-  });
-  api.put("/channels/:channel/state", (req, res) => {
+  /* Conversations (threads inside a channel) — every loop lives in one. */
+  api.post("/channels/:channel/conversations", (req, res) => {
     const agent = requireAgent(req, res);
     if (!agent) return;
+    const { title, purpose = null, successCriteria = null } = req.body ?? {};
+    if (!title || typeof title !== "string") {
+      return res.status(400).json({ error: "title required (string)" });
+    }
+    if (purpose != null && typeof purpose !== "string") {
+      return res.status(400).json({ error: "purpose must be string when provided" });
+    }
+    if (successCriteria != null && typeof successCriteria !== "string") {
+      return res.status(400).json({ error: "successCriteria must be string when provided" });
+    }
+    const conv = store.createConversation({
+      channel: req.params.channel,
+      title,
+      purpose,
+      successCriteria,
+      createdBy: agent.name,
+    });
+    store.joinChannel(req.params.channel, agent.name);
+    broadcast({ type: "conversation.created", conversation: conv });
+    res.json(conv);
+  });
+
+  api.get("/channels/:channel/conversations", (req, res) => {
+    const status = req.query.status ? String(req.query.status) : null;
+    const filter = status && status !== "all" ? status : null;
+    res.json(store.listConversations(req.params.channel, filter));
+  });
+
+  api.get("/conversations/:id", (req, res) => {
+    const conv = store.getConversation(req.params.id);
+    if (!conv) return res.status(404).json({ error: "conversation not found" });
+    res.json(conv);
+  });
+
+  api.post("/conversations/:id/close", (req, res) => {
+    const agent = requireAgent(req, res);
+    if (!agent) return;
+    const { outcome = null } = req.body ?? {};
+    if (outcome != null && typeof outcome !== "string") {
+      return res.status(400).json({ error: "outcome must be string when provided" });
+    }
+    const conv = store.closeConversation(req.params.id, { closedBy: agent.name, outcome });
+    if (!conv) return res.status(404).json({ error: "conversation not found or already closed" });
+    broadcast({ type: "conversation.closed", conversation: conv });
+    res.json(conv);
+  });
+
+  api.get("/conversations/:id/messages", (req, res) => {
+    const conversationId = req.params.id;
+    const conv = store.getConversation(conversationId);
+    if (!conv) return res.status(404).json({ error: "conversation not found" });
+    const since = Number(req.query.since ?? 0);
+    const messages = store.readMessages({ conversationId, since });
+    // Advance the read cursor only when a valid token is presented (an agent reading).
+    const agent = optionalAgent(req);
+    if (agent) {
+      store.markRead(agent.name, conversationId);
+      broadcast({
+        type: "message.read",
+        conversationId,
+        channel: conv.channel,
+        agent: agent.name,
+        at: Date.now(),
+      });
+    }
+    res.json(messages);
+  });
+
+  api.get("/conversations/:id/state", (req, res) => {
+    const conversationId = req.params.id;
+    if (!store.getConversation(conversationId)) {
+      return res.status(404).json({ error: "conversation not found" });
+    }
+    const state = store.getConversationState(conversationId);
+    res.json(state ?? { conversationId, content: "", updatedAt: null, updatedBy: null });
+  });
+
+  api.put("/conversations/:id/state", (req, res) => {
+    const agent = requireAgent(req, res);
+    if (!agent) return;
+    const conversationId = req.params.id;
+    if (!store.getConversation(conversationId)) {
+      return res.status(404).json({ error: "conversation not found" });
+    }
     const { content } = req.body ?? {};
     if (typeof content !== "string") {
       return res.status(400).json({ error: "content required (string)" });
     }
-    if (content.length > 64 * 1024) {
+    if (content.length > STATE_MAX_BYTES) {
       return res.status(413).json({ error: "state doc exceeds 64KB cap" });
     }
-    const state = store.setChannelState(req.params.channel, content, agent.name);
+    const state = store.setConversationState(conversationId, content, agent.name);
     broadcast({
-      type: "channel.state.updated",
-      channel: state.channel,
+      type: "conversation.state.updated",
+      conversationId: state.conversationId,
       updatedAt: state.updatedAt,
       updatedBy: state.updatedBy,
     });
     res.json(state);
   });
 
-  /* Direct message: canonical 2-member channel, both sides auto-joined. */
+  /* Direct message: canonical 2-member channel; DMs use a perpetual default
+   * conversation auto-created on first DM (so the 1:1 ergonomics are preserved). */
   api.post("/dm", (req, res) => {
     const agent = requireAgent(req, res);
     if (!agent) return;
@@ -162,7 +233,12 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     store.joinChannel(channel, agent.name);
     const membership = store.joinChannel(channel, to);
     broadcast({ type: "channel.updated", channel: membership });
-    const msg = store.postMessage({ channel, from: agent.name, content });
+    const dmConv = store.ensureDmConversation(channel);
+    const msg = store.postMessage({
+      conversationId: dmConv.id,
+      from: agent.name,
+      content,
+    });
     broadcast({
       type: msg.status === "pending" ? "message.pending" : "message.delivered",
       message: msg,
@@ -170,15 +246,16 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     res.json(msg);
   });
 
-  /* Messages */
+  /* Messages — always inside a conversation. If `conversation` is omitted on a
+   * regular channel post, the latest open conversation is used (409 if none). */
   api.post("/channels/:channel/messages", (req, res) => {
     const agent = requireAgent(req, res);
     if (!agent) return;
+    const channel = req.params.channel;
     const { content } = req.body ?? {};
     if (typeof content !== "string") {
       return res.status(400).json({ error: "content required (string)" });
     }
-    // `to` tags specific members (like an @mention). Normalize to a name array.
     const rawTo = req.body?.to;
     const to = (Array.isArray(rawTo) ? rawTo : rawTo ? [rawTo] : [])
       .filter((n) => typeof n === "string" && n.length);
@@ -186,11 +263,46 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     if (unknown.length) {
       return res.status(400).json({ error: `unknown agent(s) in 'to': ${unknown.join(", ")}` });
     }
-    // Verifiable contract (opt-in). Two ways to attach one:
-    //  - `contract: "<name>"` — reference a named schema saved in the config dir.
-    //  - `schema: {...}` — an inline JSON Schema (one-off).
-    // Either way `data` must satisfy it; a malformed contract is rejected here,
-    // before it can queue.
+
+    // Resolve the conversation: explicit > latest open > DM auto-create > 409.
+    let conversationId = req.body?.conversation ?? null;
+    let conv = null;
+    if (conversationId) {
+      conv = store.getConversation(conversationId);
+      if (!conv || conv.channel !== channel) {
+        return res.status(404).json({ error: "conversation not found in this channel" });
+      }
+      if (conv.status !== "open") {
+        return res.status(400).json({ error: "conversation is closed" });
+      }
+    } else if (channel.startsWith("dm:")) {
+      conv = store.ensureDmConversation(channel);
+      conversationId = conv.id;
+    } else {
+      conv = store.latestOpenConversation(channel);
+      if (!conv) {
+        // Ergonomics: if the channel has never had a conversation, auto-create
+        // a "default" so the first message doesn't fail. After that the agent
+        // is expected to open conversations explicitly per task.
+        const existing = store.listConversations(channel);
+        if (existing.length === 0) {
+          conv = store.createConversation({
+            channel,
+            title: "default",
+            purpose: null,
+            successCriteria: null,
+            createdBy: agent.name,
+          });
+          broadcast({ type: "conversation.created", conversation: conv });
+        } else {
+          return res.status(409).json({
+            error: "no open conversation in this channel — POST /api/channels/:c/conversations first",
+          });
+        }
+      }
+      conversationId = conv.id;
+    }
+
     const data = req.body?.data ?? null;
     const contractName = req.body?.contract ?? null;
     let schema = req.body?.schema ?? null;
@@ -215,8 +327,9 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
         });
       }
     }
+
     const msg = store.postMessage({
-      channel: req.params.channel,
+      conversationId,
       from: agent.name,
       content,
       to,
@@ -231,21 +344,24 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     res.json(msg);
   });
 
-  api.get("/channels/:channel/messages", (req, res) => {
-    const { channel } = req.params;
-    const since = Number(req.query.since ?? 0);
-    const messages = store.readMessages({ channel, since });
-    // Advancing the read cursor is an identity-bearing act: only when a valid
-    // token is present (an agent reading), not for the token-less human UI.
-    const agent = optionalAgent(req);
-    if (agent) {
-      store.markRead(agent.name, channel);
-      broadcast({ type: "message.read", channel, agent: agent.name, at: Date.now() });
-    }
-    res.json(messages);
+  /* Deprecated routes (pre-v3 — messages and state doc lived on channels). */
+  api.get("/channels/:channel/messages", (_req, res) => {
+    res.status(410).json({
+      error: "deprecated: use GET /api/channels/:c/conversations then GET /api/conversations/:id/messages",
+    });
+  });
+  api.get("/channels/:channel/state", (_req, res) => {
+    res.status(410).json({
+      error: "deprecated: state docs moved to conversations. Use GET /api/conversations/:id/state",
+    });
+  });
+  api.put("/channels/:channel/state", (_req, res) => {
+    res.status(410).json({
+      error: "deprecated: state docs moved to conversations. Use PUT /api/conversations/:id/state",
+    });
   });
 
-  /* Inbox + wait (agent-only) */
+  /* Inbox + wait (agent-only) — per-conversation. */
   api.get("/inbox", (req, res) => {
     const agent = requireAgent(req, res);
     if (!agent) return;
@@ -255,16 +371,28 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
   api.get("/wait", async (req, res) => {
     const agent = requireAgent(req, res);
     if (!agent) return;
+    const conversationId = req.query.conversation ? String(req.query.conversation) : null;
     const channel = req.query.channel ? String(req.query.channel) : null;
     let timeoutMs = Number(req.query.timeout_ms ?? 25000);
     if (!Number.isFinite(timeoutMs)) timeoutMs = 25000;
     timeoutMs = Math.min(Math.max(timeoutMs, 1000), 60000);
     if (channel) store.joinChannel(channel, agent.name);
-    const messages = await store.waitForMessage({ agent: agent.name, channel, timeoutMs });
+    const messages = await store.waitForMessage({
+      agent: agent.name,
+      conversationId,
+      channel,
+      timeoutMs,
+    });
     if (messages.length) {
-      const ch = messages[0].channel;
-      store.markRead(agent.name, ch);
-      broadcast({ type: "message.read", channel: ch, agent: agent.name, at: Date.now() });
+      const m = messages[0];
+      store.markRead(agent.name, m.conversationId);
+      broadcast({
+        type: "message.read",
+        conversationId: m.conversationId,
+        channel: m.channel,
+        agent: agent.name,
+        at: Date.now(),
+      });
     }
     res.json(messages);
   });
@@ -305,10 +433,7 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     res.json(msg);
   });
 
-  /* Setup wizard + config editing (human surfaces — no agent token required).
-   * The config dir is the durable source of truth; these read/write it. */
-
-  // First-run status + current config. `needed` drives the web wizard.
+  /* Setup wizard + config editing (human surfaces — no agent token required). */
   api.get("/setup", (_req, res) => {
     if (!config) return res.json({ needed: false, configured: false });
     res.json({
@@ -322,7 +447,6 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     });
   });
 
-  // Complete (or re-run) setup: write mode + policy + contracts in one shot.
   api.post("/setup", (req, res) => {
     if (!config) return res.status(409).json({ error: "no config store" });
     const { mode, policy, contracts } = req.body ?? {};
@@ -358,7 +482,6 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     });
   });
 
-  // Contracts CRUD (named JSON Schemas).
   api.get("/contracts", (_req, res) => {
     res.json(config ? config.listContracts() : []);
   });
@@ -384,7 +507,6 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     res.json({ ok: true });
   });
 
-  // Reviewer policy (read/edit) — live-applied to the reviewer.
   api.get("/policy", (_req, res) => {
     res.json({ policy: config?.readPolicy() ?? "", defaultPolicy: DEFAULT_POLICY });
   });
