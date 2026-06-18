@@ -112,10 +112,11 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     res.json(result);
   });
 
-  /* Conversations (threads inside a channel) — every loop lives in one. */
+  /* Conversations (threads inside a channel) — every loop lives in one.
+   * Either an agent (Bearer token) or a human supervisor (no token) can open
+   * a conversation; the human is recorded as `createdBy: "supervisor"`. */
   api.post("/channels/:channel/conversations", (req, res) => {
-    const agent = requireAgent(req, res);
-    if (!agent) return;
+    const agent = optionalAgent(req);
     const { title, purpose = null, successCriteria = null } = req.body ?? {};
     if (!title || typeof title !== "string") {
       return res.status(400).json({ error: "title required (string)" });
@@ -126,14 +127,15 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     if (successCriteria != null && typeof successCriteria !== "string") {
       return res.status(400).json({ error: "successCriteria must be string when provided" });
     }
+    const createdBy = agent?.name ?? "supervisor";
     const conv = store.createConversation({
       channel: req.params.channel,
       title,
       purpose,
       successCriteria,
-      createdBy: agent.name,
+      createdBy,
     });
-    store.joinChannel(req.params.channel, agent.name);
+    if (agent) store.joinChannel(req.params.channel, agent.name);
     broadcast({ type: "conversation.created", conversation: conv });
     res.json(conv);
   });
@@ -151,13 +153,13 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
   });
 
   api.post("/conversations/:id/close", (req, res) => {
-    const agent = requireAgent(req, res);
-    if (!agent) return;
+    const agent = optionalAgent(req);
     const { outcome = null } = req.body ?? {};
     if (outcome != null && typeof outcome !== "string") {
       return res.status(400).json({ error: "outcome must be string when provided" });
     }
-    const conv = store.closeConversation(req.params.id, { closedBy: agent.name, outcome });
+    const closedBy = agent?.name ?? "supervisor";
+    const conv = store.closeConversation(req.params.id, { closedBy, outcome });
     if (!conv) return res.status(404).json({ error: "conversation not found or already closed" });
     broadcast({ type: "conversation.closed", conversation: conv });
     res.json(conv);
@@ -194,8 +196,7 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
   });
 
   api.put("/conversations/:id/state", (req, res) => {
-    const agent = requireAgent(req, res);
-    if (!agent) return;
+    const agent = optionalAgent(req);
     const conversationId = req.params.id;
     if (!store.getConversation(conversationId)) {
       return res.status(404).json({ error: "conversation not found" });
@@ -207,7 +208,8 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     if (content.length > STATE_MAX_BYTES) {
       return res.status(413).json({ error: "state doc exceeds 64KB cap" });
     }
-    const state = store.setConversationState(conversationId, content, agent.name);
+    const writer = agent?.name ?? "supervisor";
+    const state = store.setConversationState(conversationId, content, writer);
     broadcast({
       type: "conversation.state.updated",
       conversationId: state.conversationId,

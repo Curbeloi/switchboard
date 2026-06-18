@@ -453,7 +453,9 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
     setConversationState(conversationId, content, agent) {
       const conv = q.convById.get(conversationId);
       if (!conv) throw new Error(`unknown conversation: ${conversationId}`);
-      q.insMember.run(conv.channel, agent);
+      // Real agents become members of the channel; the human "supervisor"
+      // sentinel does not (it isn't a registered agent).
+      if (q.agentByName.get(agent)) q.insMember.run(conv.channel, agent);
       const updatedAt = Date.now();
       q.setState.run(conversationId, content, updatedAt, agent);
       return { conversationId, content, updatedAt, updatedBy: agent };
