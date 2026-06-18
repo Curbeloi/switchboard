@@ -593,9 +593,9 @@ function createLatestSchema(db) {
   `);
 }
 
-/** v1 → v2 (introduced in v3.0.0): flat-channel DB gains conversations.
+/** v1 → v2 (introduced in v2.8.0): flat-channel DB gains conversations.
  *  Each existing channel gets a "default" open conversation that absorbs its
- *  messages, read cursors, and (if present) v2.8.0 channel-level state doc. */
+ *  messages, read cursors, and (if present) the earlier channel-level state doc. */
 function migrateV1toV2(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS conversations (
@@ -695,7 +695,7 @@ function migrateV1toV2(db) {
   }
 }
 
-/** v2 → v3 (introduced in v3.1.0): conversations gain an optional
+/** v2 → v3 (introduced in v2.8.0): conversations gain an optional
  *  `contract_name` for DSP-style per-conversation governance. */
 function migrateV2toV3(db) {
   const convCols = db.prepare("PRAGMA table_info(conversations)").all().map((c) => c.name);
