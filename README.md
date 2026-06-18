@@ -59,6 +59,17 @@ Set the mode in the web UI, the relay REPL, or the wizard — your choice is sav
 
 `llm` **fails safe** (any reviewer error escalates, never auto-approves) and treats messages as untrusted data. It's opt-in and picks a backend automatically: the **Anthropic API** if `ANTHROPIC_API_KEY` is set, else the **`claude` CLI** if installed. Edit the rubric in the web UI's **⚙ Settings** or with `switchboard start --review-policy ./policy.md`.
 
+### Web supervision UI
+
+Open **http://localhost:8765**. The layout is three columns — **channels** (left) → **conversations** of the selected channel (middle) → **messages** of the selected conversation (right). The header carries the live controls:
+
+- **Language** — `Español` / `English`. UI strings only; persists in `localStorage`.
+- **Theme** — `light` / `dark` / `auto` (follows your OS). Persists in `localStorage`. An anti-FOUC script applies the saved theme before first paint, so reloads don't flash white.
+- **Mode** — supervision mode (`manual` / `auto` / `llm`). Changing it is live; persisted via `/api/setup`.
+- **⚙ Settings** — overlay to edit mode, reviewer policy, and named contracts after the wizard.
+
+On first run (when `~/.switchboard/config.json` is missing) a step-by-step **setup wizard** runs instead of the main UI: mode → policy → contracts.
+
 ### The agent's tools
 
 | Tool | What it does |
@@ -122,7 +133,7 @@ The loop:
 1. **Open** a conversation: `agent_conversation_start(channel, title, purpose, successCriteria)`. The `successCriteria` is your stop condition — make it checkable.
 2. **Read** the state doc at the start of every turn.
 3. **Do** the work; **post** what changed (`agent_send` defaults to this conversation).
-4. **Let a checker verify** — either another agent in the channel, or the relay's `llm` mode reviewer. Don't grade your own homework.
+4. **Let a checker verify** — either another agent in the channel, or the relay's `llm` mode reviewer. **Don't grade your own homework.** When using the `dsp.v1` contract, fill `verifier_summary` with the checker's verdict so the reviewer can judge whether you actually verified. The skill installed in each project shows how to launch a `code-reviewer` subagent via Claude Code's **Task tool** before posting.
 5. **Update** the state doc on approval.
 6. **Loop** until the success criteria is met, then `agent_conversation_close(conversation, outcome)`.
 
