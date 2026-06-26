@@ -20,7 +20,11 @@
   </head>
   <body class="h-screen bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-200 font-sans flex flex-col overflow-hidden">
     <header class="h-12 flex-shrink-0 border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 flex items-center justify-between">
-      <h1 class="text-base font-semibold tracking-wide text-slate-900 dark:text-slate-100" data-i18n="app.title">switchboard</h1>
+      <div class="flex items-center gap-2">
+        <h1 class="text-base font-semibold tracking-wide text-slate-900 dark:text-slate-100" data-i18n="app.title">switchboard</h1>
+        <button id="toggle-channels" class="text-sm rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-0.5 hover:border-blue-500 hover:text-blue-600" data-i18n-title="toggleChannels" title="channels panel">◧</button>
+        <button id="toggle-conv" class="text-sm rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-0.5 hover:border-blue-500 hover:text-blue-600" data-i18n-title="toggleConversations" title="conversations panel">◨</button>
+      </div>
       <div class="flex items-center gap-3">
         <label class="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
           <span data-i18n="lang.label">Language</span>
@@ -53,8 +57,8 @@
     <div id="overlay" class="overlay" hidden></div>
 
     <main class="flex-1 flex min-h-0">
-      <!-- Col 1: channels + agents -->
-      <aside class="w-56 flex-shrink-0 border-r border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-y-auto flex flex-col">
+      <!-- Channels + agents (left column) -->
+      <aside id="col-channels" class="order-1 w-60 flex-shrink-0 border-r border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-y-auto flex flex-col">
         <section class="p-3">
           <h2 class="text-[10px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400 mb-2" data-i18n="channels">Channels</h2>
           <ul id="channels" class="space-y-0.5"><li class="text-xs text-slate-400 italic px-2" data-i18n="noChannels">no channels yet</li></ul>
@@ -69,12 +73,12 @@
         </section>
       </aside>
 
-      <!-- Col 2: conversations of selected channel -->
-      <aside class="w-72 flex-shrink-0 border-r border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 flex flex-col overflow-hidden">
+      <!-- Conversations of selected channel (right column) -->
+      <aside id="col-conversations" class="order-3 w-72 flex-shrink-0 border-l border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 flex flex-col overflow-hidden">
         <div id="conv-header" class="px-3 py-2 border-b border-slate-200 dark:border-slate-700">
           <h2 id="conv-channel-name" class="font-mono text-sm text-slate-700 dark:text-slate-200">—</h2>
           <p id="conv-channel-meta" class="text-[11px] text-slate-400 font-mono mt-0.5" data-i18n="selectChannel">select a channel</p>
-          <div id="conv-members" class="mt-1 flex flex-wrap items-center gap-1"></div>
+          <div id="conv-members" class="mt-2 space-y-1.5"></div>
         </div>
         <div id="conv-new" class="px-3 py-2 border-b border-slate-200 dark:border-slate-700 hidden">
           <input type="text" id="new-conv-title" data-i18n-placeholder="newConvTitle" placeholder="new conversation title…" class="w-full text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 font-mono" />
@@ -88,7 +92,7 @@
       </aside>
 
       <!-- Col 3: messages of selected conversation -->
-      <section id="feed" class="flex-1 flex flex-col overflow-hidden bg-slate-50 dark:bg-slate-900">
+      <section id="feed" class="order-2 flex-1 flex flex-col overflow-hidden bg-slate-50 dark:bg-slate-900">
         <div id="msg-header" class="px-4 py-2 border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
           <div class="flex items-center justify-between gap-2">
             <h2 id="conv-title" class="font-mono text-base text-slate-900 dark:text-slate-100" data-i18n="selectConversation">Select a conversation</h2>

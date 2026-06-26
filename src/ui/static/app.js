@@ -186,39 +186,47 @@
    * channel.updated broadcast re-renders this pane, so mutations need no manual refresh. */
   function renderChannelMembers(members) {
     convMembers.innerHTML = "";
-    const label = document.createElement("span");
-    label.className = "text-[11px] text-slate-400 font-mono";
-    label.textContent = t("membersInline");
+    // Label row.
+    const label = document.createElement("div");
+    label.className = "text-[10px] uppercase tracking-wider font-semibold text-slate-400";
+    label.textContent = t("membersLabel");
     convMembers.appendChild(label);
 
+    // Chips (wrap with breathing room), each removable.
+    const chips = document.createElement("div");
+    chips.className = "flex flex-wrap gap-1.5";
     if (!members.length) {
       const none = document.createElement("span");
       none.className = "text-[11px] text-slate-400 italic";
       none.textContent = t("membersNone");
-      convMembers.appendChild(none);
+      chips.appendChild(none);
     }
     for (const name of members) {
       const chip = document.createElement("span");
       chip.className =
-        "inline-flex items-center gap-1 text-[11px] font-mono bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded px-1.5 py-0.5";
+        "inline-flex items-center gap-1.5 text-[11px] font-mono bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded px-2 py-0.5";
       const n = document.createElement("span");
       n.textContent = name;
       chip.appendChild(n);
       const x = document.createElement("button");
       x.type = "button";
-      x.className = "text-slate-400 hover:text-red-500 leading-none";
+      x.className = "text-slate-400 hover:text-red-500 leading-none text-sm";
       x.textContent = "×";
       x.title = t("removeFromChannel");
       x.onclick = () => removeMember(selectedChannel, name);
       chip.appendChild(x);
-      convMembers.appendChild(chip);
+      chips.appendChild(chip);
     }
+    convMembers.appendChild(chips);
 
+    // Add-agent row on its own line (select fills the width + a clear button).
     const candidates = [...agents.keys()].filter((a) => !members.includes(a));
     if (candidates.length) {
+      const row = document.createElement("div");
+      row.className = "flex gap-1";
       const sel = document.createElement("select");
       sel.className =
-        "text-[11px] rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-1 py-0.5 font-mono";
+        "flex-1 min-w-0 text-[11px] rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-1.5 py-1 font-mono";
       const def = document.createElement("option");
       def.value = "";
       def.textContent = t("addAgentOption");
@@ -232,12 +240,13 @@
       const add = document.createElement("button");
       add.type = "button";
       add.className =
-        "px-1.5 rounded bg-slate-200 dark:bg-slate-700 dark:text-slate-200 hover:bg-blue-500 hover:text-white text-xs leading-none";
+        "px-2.5 rounded bg-slate-200 dark:bg-slate-700 dark:text-slate-200 hover:bg-blue-500 hover:text-white text-sm leading-none";
       add.textContent = "+";
       add.title = t("addToChannel");
       add.onclick = () => { if (sel.value) addMember(selectedChannel, sel.value); };
-      convMembers.appendChild(sel);
-      convMembers.appendChild(add);
+      row.appendChild(sel);
+      row.appendChild(add);
+      convMembers.appendChild(row);
     }
   }
   async function addMember(channel, agent) {
@@ -1021,6 +1030,22 @@
           <label>${escapeHtml(t("provider"))}</label>
           <select id="set-rv-provider">${opts}</select>
         </div>
+        <div class="field" id="set-rv-baseurl-wrap">
+          <label>${escapeHtml(t("baseUrl"))}</label>
+          <input type="text" id="set-rv-baseurl" value="${escapeHtml(sel.baseUrl || "")}" placeholder="http://127.0.0.1:11434" />
+        </div>
+        <div class="field" id="set-rv-key-wrap">
+          <label>${escapeHtml(t("apiKey"))}</label>
+          <div class="flex gap-1">
+            <input type="password" id="set-rv-key" autocomplete="off" class="flex-1 min-w-0" placeholder="${escapeHtml(t("apiKeyPlaceholder"))}" />
+            <button id="set-rv-connect" type="button" class="btn btn-primary">${escapeHtml(t("connect"))}</button>
+          </div>
+          <div class="field-error" id="set-rv-key-msg"></div>
+        </div>
+        <div class="field-ok" id="set-rv-connected-wrap">
+          <span id="set-rv-connected-text"></span>
+          <button id="set-rv-changekey" type="button" class="underline text-xs text-slate-500 dark:text-slate-400 ml-1">${escapeHtml(t("changeKey"))}</button>
+        </div>
         <div class="field">
           <label>${escapeHtml(t("model"))}</label>
           <div class="flex gap-1">
@@ -1031,15 +1056,6 @@
           </div>
           <input type="text" id="set-rv-model" class="mt-1" value="${escapeHtml(sel.model || "")}" />
           <div class="field-ok" id="set-rv-model-msg"></div>
-        </div>
-        <div class="field" id="set-rv-baseurl-wrap">
-          <label>${escapeHtml(t("baseUrl"))}</label>
-          <input type="text" id="set-rv-baseurl" value="${escapeHtml(sel.baseUrl || "")}" placeholder="http://127.0.0.1:11434" />
-        </div>
-        <div class="field" id="set-rv-key-wrap">
-          <label id="set-rv-key-label">${escapeHtml(t("apiKey"))}</label>
-          <input type="password" id="set-rv-key" autocomplete="off" placeholder="${escapeHtml(t("apiKeyKeep"))}" />
-          <div class="field-ok" id="set-rv-key-state"></div>
         </div>
         <div class="field-ok" id="set-rv-status">${escapeHtml(status)}</div>
         <button class="btn btn-primary" id="set-rv-save" type="button">${escapeHtml(t("saveProvider"))}</button>
@@ -1059,9 +1075,24 @@
     const baseUrlWrap = overlay.querySelector("#set-rv-baseurl-wrap");
     const keyWrap = overlay.querySelector("#set-rv-key-wrap");
     const keyInput = overlay.querySelector("#set-rv-key");
-    const keyState = overlay.querySelector("#set-rv-key-state");
+    const keyMsg = overlay.querySelector("#set-rv-key-msg");
+    const connectedWrap = overlay.querySelector("#set-rv-connected-wrap");
+    const connectedText = overlay.querySelector("#set-rv-connected-text");
+    let forceKey = false; // user clicked "change key" → re-reveal the input
+
+    // For "auto", the server resolved a concrete backend (cfg.provider).
+    const resolvedProvider = (p) => (p === "auto" ? cfg.provider || null : p);
+    function isConnected(p) {
+      const meta = providers[p];
+      if (p === "auto") return Boolean(cfg.available);
+      if (meta?.needsKey) return Boolean(keysSet[p]);
+      if (p === "claude-cli" || p === "opencode") return Boolean(cliAvailable[p]);
+      if (p === "ollama") return true; // assume reachable; the fetch reveals the truth
+      return Boolean(cfg.available);
+    }
 
     async function fetchModels(p) {
+      if (!p) { modelMsg.textContent = ""; return; }
       modelMsg.textContent = t("loadingModels");
       try {
         const r = await fetch(`/api/reviewer/models?provider=${encodeURIComponent(p)}`);
@@ -1087,35 +1118,72 @@
     function syncFields() {
       const p = providerSel.value;
       const meta = providers[p];
+      const needsKey = Boolean(meta?.needsKey);
+      const connected = isConnected(p);
       const def = meta?.defaultModel;
       modelInput.placeholder = def ? t("modelDefault", { model: def }) : "";
       baseUrlWrap.style.display = p === "ollama" ? "" : "none";
-      const needsKey = Boolean(meta?.needsKey);
-      keyWrap.style.display = needsKey ? "" : "none";
-      keyState.textContent = needsKey ? (keysSet[p] ? t("apiKeySet") : t("apiKeyNotSet")) : "";
-      // Reset + auto-load the model list when we plausibly can.
+
+      // Key input (when a key is needed and we're not connected yet, or the user
+      // chose to change it) vs the "Connected ✓" indicator.
+      const showKey = needsKey && (!connected || forceKey);
+      keyWrap.style.display = showKey ? "" : "none";
+      connectedWrap.style.display = needsKey && connected && !forceKey ? "" : "none";
+      if (needsKey && connected) connectedText.textContent = t("connected");
+      keyMsg.textContent = "";
+      keyInput.value = "";
+
+      // Model list: load once connected. CLI backends (claude-cli/opencode) list
+      // when installed; keyed providers list once their key is saved.
       modelList.innerHTML = `<option value="">${escapeHtml(t("modelsPick"))}</option>`;
-      if (p === "auto") {
+      modelList.disabled = needsKey && !connected;
+      const rp = resolvedProvider(p);
+      if (needsKey && !connected) {
+        modelMsg.textContent = t("modelsNeedConnect");
+      } else if ((rp === "claude-cli" || rp === "opencode") && cliAvailable[rp] === false) {
+        modelMsg.textContent = t("cliMissing");
+      } else if (!rp) {
         modelMsg.textContent = "";
-      } else if (p === "claude-cli") {
-        // CLI-backed, model fixed by the CLI — just report install status.
-        modelMsg.textContent = cliAvailable[p] ? t("cliInstalled") : t("cliMissing");
-      } else if (p === "opencode") {
-        if (cliAvailable[p]) fetchModels(p); // discover opencode's configured models
-        else modelMsg.textContent = t("cliMissing");
-      } else if (needsKey && !keysSet[p]) {
-        modelMsg.textContent = t("modelsNeedKey");
       } else {
-        fetchModels(p);
+        fetchModels(rp); // claude-cli / opencode / ollama / connected keyed / auto→resolved
       }
     }
     syncFields();
-    providerSel.onchange = syncFields;
+    providerSel.onchange = () => { forceKey = false; syncFields(); };
+
     overlay.querySelector("#set-rv-model-fetch").onclick = () => {
-      const p = providerSel.value;
-      if (p !== "auto" && p !== "claude-cli") fetchModels(p);
+      const rp = resolvedProvider(providerSel.value);
+      if (rp) fetchModels(rp);
     };
     modelList.onchange = () => { if (modelList.value) modelInput.value = modelList.value; };
+    overlay.querySelector("#set-rv-changekey").onclick = () => {
+      forceKey = true;
+      syncFields();
+      keyInput.focus();
+    };
+
+    // Connect: save the key, then re-render — keysSet flips on, the key hides,
+    // and the model list auto-loads (the server now resolves the saved key).
+    overlay.querySelector("#set-rv-connect").onclick = async () => {
+      const p = providerSel.value;
+      const key = keyInput.value.trim();
+      if (!key) { keyMsg.textContent = t("apiKeyEmpty"); return; }
+      keyMsg.textContent = t("connecting");
+      const res = await fetch("/api/reviewer", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: p, keys: { [p]: key } }),
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        keyMsg.textContent = e.error || t("saveFailed");
+        return;
+      }
+      const updated = await res.json();
+      setReviewerAvailable(Boolean(updated.available));
+      forceKey = false;
+      refreshSettings();
+    };
 
     overlay.querySelector("#set-rv-save").onclick = async () => {
       const provider = providerSel.value;
@@ -1125,8 +1193,7 @@
         model: modelInput.value.trim(),
         baseUrl: overlay.querySelector("#set-rv-baseurl").value.trim(),
       };
-      const keyVal = keyInput.value;
-      if (meta?.needsKey && keyVal) body.keys = { [provider]: keyVal };
+      if (meta?.needsKey && keyInput.value.trim()) body.keys = { [provider]: keyInput.value.trim() };
       const msg = overlay.querySelector("#set-rv-msg");
       msg.textContent = t("saving");
       const res = await fetch("/api/reviewer", {
@@ -1263,6 +1330,27 @@
       applyTheme(themeSelect.value);
     });
   }
+
+  /* ---------- collapsible side panels (persist in localStorage) ---------- */
+  function wirePanelToggle(btnId, colId, key) {
+    const btn = document.getElementById(btnId);
+    const col = document.getElementById(colId);
+    if (!btn || !col) return;
+    const apply = () => {
+      const hidden = localStorage.getItem(key) === "hidden";
+      col.classList.toggle("hidden", hidden);
+      btn.classList.toggle("text-blue-600", !hidden);
+      btn.classList.toggle("border-blue-500", !hidden);
+    };
+    btn.addEventListener("click", () => {
+      const next = localStorage.getItem(key) === "hidden" ? "shown" : "hidden";
+      localStorage.setItem(key, next);
+      apply();
+    });
+    apply();
+  }
+  wirePanelToggle("toggle-conv", "col-conversations", "sb.panel.conv");
+  wirePanelToggle("toggle-channels", "col-channels", "sb.panel.channels");
 
   /* ---------- language ---------- */
   function rerenderAll() {
