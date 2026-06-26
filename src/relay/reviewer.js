@@ -19,6 +19,12 @@ export const REVIEWER_PROVIDERS = {
 const DEFAULT_MODEL = REVIEWER_PROVIDERS.anthropic.defaultModel; // back-compat alias
 const DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434";
 
+/** The Claude Code CLI has no machine-readable model list, but `claude --model`
+ *  accepts these stable aliases (each maps to the latest of that tier). Offered
+ *  in the picker so claude-cli is selectable without an API key. "default" = let
+ *  the CLI use its configured default (no --model flag). */
+const CLAUDE_CLI_MODELS = ["default", "sonnet", "opus", "haiku"];
+
 /** The rubric the LLM judges against. Static across messages → marked for
  *  prompt caching. Override with --review-policy / SWITCHBOARD_REVIEW_POLICY,
  *  or edit it from the web UI (which writes ~/.switchboard/policy.md). */
@@ -208,7 +214,10 @@ export async function complete(provider, { key, baseUrl, model, system, user } =
       return (b?.message?.content ?? "").trim();
     }
     case "claude-cli": {
-      const { stdout } = await execFileAsync("claude", ["-p", `${system}\n\n${user}`], {
+      const args = ["-p"];
+      if (model && model !== "default" && model !== "claude-cli") args.push("--model", model);
+      args.push(`${system}\n\n${user}`);
+      const { stdout } = await execFileAsync("claude", args, {
         timeout: 60000,
         maxBuffer: 1024 * 1024,
       });
@@ -282,7 +291,7 @@ export async function listModels(provider, { key, baseUrl } = {}) {
       return (b.data || []).map((m) => m.id).sort();
     }
     case "claude-cli":
-      return [];
+      return [...CLAUDE_CLI_MODELS];
     case "opencode": {
       const { stdout } = await execFileAsync("opencode", ["models"], {
         timeout: 15000,
@@ -353,11 +362,15 @@ export function createReviewer(initialConfig = {}) {
     return { available: true, backend: "anthropic", model, provider: "anthropic", review };
   }
 
-  function makeClaudeCli() {
+  function makeClaudeCli(model) {
+    const useModel = model && model !== "default" ? model : null;
     const review = async (message) => {
       const prompt = rubric + "\n\n" + userPrompt(message);
+      const args = ["-p"];
+      if (useModel) args.push("--model", useModel);
+      args.push(prompt);
       try {
-        const { stdout } = await execFileAsync("claude", ["-p", prompt], {
+        const { stdout } = await execFileAsync("claude", args, {
           timeout: 60000,
           maxBuffer: 1024 * 1024,
         });
@@ -366,7 +379,7 @@ export function createReviewer(initialConfig = {}) {
         return { decision: "escalate", reason: `reviewer (cli) error: ${err.message}` };
       }
     };
-    return { available: true, backend: "claude-cli", model: "claude-cli", provider: "claude-cli", review };
+    return { available: true, backend: "claude-cli", model: useModel || "claude-cli", provider: "claude-cli", review };
   }
 
   function makeOpencode(model) {
@@ -498,7 +511,7 @@ export function createReviewer(initialConfig = {}) {
         return key ? makeAnthropic(key, modelFor(cfg, "anthropic")) : UNAVAILABLE;
       }
       case "claude-cli":
-        return cfg.allowCli !== false && claudeCliAvailable() ? makeClaudeCli() : UNAVAILABLE;
+        return cfg.allowCli !== false && claudeCliAvailable() ? makeClaudeCli(cfg.model || null) : UNAVAILABLE;
       case "opencode":
         return opencodeCliAvailable() ? makeOpencode(cfg.model || null) : UNAVAILABLE;
       case "openai": {
@@ -522,7 +535,7 @@ export function createReviewer(initialConfig = {}) {
     /* auto: preserve legacy behavior exactly — Anthropic API, else Claude CLI. */
     const anthropicKey = resolveKey(cfg, "anthropic");
     if (anthropicKey) return makeAnthropic(anthropicKey, modelFor(cfg, "anthropic"));
-    if (cfg.allowCli !== false && claudeCliAvailable()) return makeClaudeCli();
+    if (cfg.allowCli !== false && claudeCliAvailable()) return makeClaudeCli(cfg.model || null);
     return UNAVAILABLE;
   }
 
