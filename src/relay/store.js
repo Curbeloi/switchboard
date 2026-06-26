@@ -27,6 +27,32 @@ import { DEFAULT_CONFIG_DIR } from "./config.js";
 
 const SCHEMA_VERSION = 3;
 
+/* The PROGRESS.md skeleton seeded into every new conversation's state doc so it's
+ * never blank: agents update this structure instead of facing an empty doc. */
+export function initialStateDoc({ title, purpose, successCriteria } = {}) {
+  const crit = (successCriteria || "").trim();
+  return [
+    "# Purpose",
+    (purpose || title || "").trim() || "(describe what this loop is doing, in one sentence)",
+    "",
+    "# Success criteria",
+    crit ? `- ${crit}` : "- (define the objective signal that ends this loop)",
+    "",
+    "# Done",
+    "- (nothing yet)",
+    "",
+    "# In progress",
+    "- (just started)",
+    "",
+    "# Next",
+    "- (first step)",
+    "",
+    "# Blocked / Decisions",
+    "- (none)",
+    "",
+  ].join("\n");
+}
+
 export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db") } = {}) {
   if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
@@ -240,7 +266,24 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
     const parts = channel.slice(3).split("+");
     const purpose = parts.length === 2 ? `1:1 between ${parts[0]} and ${parts[1]}` : null;
     q.insConv.run(id, channel, "direct", purpose, null, null, now, "system");
+    q.setState.run(id, initialStateDoc({ title: "direct", purpose }), now, "system");
     return rowToConversation(q.convById.get(id));
+  }
+
+  // One-time backfill: older conversations (created before state-doc seeding, or
+  // via paths that bypassed it) have no state row — give them the skeleton so the
+  // doc is never blank. Idempotent: after the first boot there's nothing missing.
+  {
+    const missing = db
+      .prepare(
+        "SELECT c.id, c.title, c.purpose, c.successCriteria FROM conversations c " +
+          "LEFT JOIN conversation_state s ON s.conversation_id = c.id WHERE s.conversation_id IS NULL"
+      )
+      .all();
+    const now = Date.now();
+    for (const c of missing) {
+      q.setState.run(c.id, initialStateDoc(c), now, "system");
+    }
   }
 
   return {
@@ -333,7 +376,9 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
     }) {
       ensureChannel(channel);
       const id = randomUUID();
-      q.insConv.run(id, channel, title, purpose, successCriteria, contractName, Date.now(), createdBy);
+      const now = Date.now();
+      q.insConv.run(id, channel, title, purpose, successCriteria, contractName, now, createdBy);
+      q.setState.run(id, initialStateDoc({ title, purpose, successCriteria }), now, createdBy ?? "system");
       return rowToConversation(q.convById.get(id));
     },
     getConversation(id) {
@@ -373,8 +418,10 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
       if (!conv) throw new Error(`unknown conversation: ${conversationId}`);
       if (conv.status !== "open") throw new Error(`conversation is closed: ${conversationId}`);
       ensureChannel(conv.channel);
-      q.insMember.run(conv.channel, from);
-      for (const m of to) q.insMember.run(conv.channel, m);
+      // "master" is the supervisor sentinel — never a persistent channel member,
+      // whether it's the sender or an addressed recipient.
+      if (from !== "master") q.insMember.run(conv.channel, from);
+      for (const m of to) if (m !== "master") q.insMember.run(conv.channel, m);
       // DSP safety axiom: a message declaring `decision_type: "IRREVERSIBLE"`
       // is forced to `pending` regardless of supervision mode — no level of
       // confidence authorizes autonomous execution of an irreversible action.

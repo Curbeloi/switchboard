@@ -34,6 +34,7 @@ export async function startRelay({
     ...reviewerCfg,
     policy: reviewPolicy ?? config.readPolicy() ?? undefined,
     model: reviewModel ?? reviewerCfg.model,
+    locale: config.readConfig().locale ?? null,
   });
   const app = express();
   app.use(express.json({ limit: "1mb" }));

@@ -1,8 +1,48 @@
 import { Router } from "express";
 import Ajv from "ajv";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { DEFAULT_POLICY, REVIEWER_PROVIDERS, listModels, reviewerCliAvailability, complete } from "../reviewer.js";
 
 const ajv = new Ajv({ allErrors: true, strict: false });
+const execFileAsync = promisify(execFile);
+
+/* Read-only git inspection for the master's code-review action. Runs in `dir`
+ * with execFile (no shell → no injection). Returns the uncommitted diff vs HEAD
+ * plus a short status (so new/untracked files show up too). Throws if not a repo. */
+const REVIEW_DIFF_CAP = 100_000; // chars fed to the LLM (truncate huge diffs)
+async function gitReview(dir) {
+  const run = (args) =>
+    execFileAsync("git", ["-C", dir, ...args], { timeout: 15000, maxBuffer: 8 * 1024 * 1024 });
+  await run(["rev-parse", "--is-inside-work-tree"]); // throws if dir isn't a git repo
+  let diff = "";
+  try {
+    diff = (await run(["diff", "HEAD"])).stdout; // staged + unstaged vs last commit
+  } catch {
+    diff = (await run(["diff"])).stdout; // empty repo / no HEAD → unstaged only
+  }
+  const status = (await run(["status", "--short"])).stdout;
+  let truncated = false;
+  if (diff.length > REVIEW_DIFF_CAP) {
+    diff = diff.slice(0, REVIEW_DIFF_CAP);
+    truncated = true;
+  }
+  return { diff, status, truncated };
+}
+function masterReviewPrompt(conv, dir, { diff, status, truncated }, locale = null) {
+  return {
+    system:
+      'You are "master"\'s code supervisor: a senior reviewer inspecting the code an agent produced. ' +
+      "Review the git diff for correctness bugs, security issues, missing error handling, and whether it matches the " +
+      "conversation's purpose. Be concise and structured: list concrete issues (file + what + why) and a short verdict. " +
+      "If the diff is empty, say there are no uncommitted changes to review." +
+      masterLangLine(locale),
+    user:
+      `${masterContext(conv)}\nReviewing directory: ${dir}\n\n` +
+      `git status --short:\n${status || "(clean)"}\n\n` +
+      `git diff HEAD${truncated ? " (TRUNCATED — large diff)" : ""}:\n${diff || "(no uncommitted changes)"}`,
+  };
+}
 
 /** Compile a JSON Schema, returning an error string or null if it's valid. */
 function schemaError(schema) {
@@ -27,32 +67,55 @@ const STATE_MAX_BYTES = 64 * 1024;
 
 /* ---- "master" mediator prompts (pure helpers) ---- */
 const MASTER_TRANSCRIPT_MAX = 40;
+const MASTER_LANGS = { es: "neutral Spanish (Latin-American, no voseo)", en: "English" };
+function masterLangLine(locale) {
+  const lang = MASTER_LANGS[locale];
+  return lang ? ` Write your output in ${lang}.` : "";
+}
 function masterTranscript(messages) {
   const recent = messages.slice(-MASTER_TRANSCRIPT_MAX);
   if (!recent.length) return "(no messages yet)";
   return recent.map((m) => `${m.from}: ${String(m.content || "").replace(/\s+/g, " ")}`).join("\n");
 }
-function masterComposePrompt(conv, transcript, instruction) {
+/* Where the master is acting — pinned at the top of every prompt so the composed
+ * message stays anchored to THIS channel + conversation (and the recipients here),
+ * instead of drifting into "spin up a new channel". */
+function masterContext(conv, members = []) {
+  return (
+    `Channel: ${conv.channel}\n` +
+    `Conversation: "${conv.title}" (id ${conv.id})\n` +
+    `Purpose: ${conv.purpose || "(none)"}\n` +
+    `Agents in this channel: ${members.length ? members.join(", ") : "(none listed)"}`
+  );
+}
+function masterComposePrompt(conv, transcript, instruction, locale = null, members = []) {
   return {
     system:
-      'You are "master", the human supervisor\'s voice inside a multi-agent coding conversation. ' +
-      "The supervisor gives you an instruction in their own words; turn it into a clear, direct message to the " +
-      "agent(s), grounded in the conversation so far. Output ONLY the message to send — no preamble, no quotes, no markdown fences.",
+      'You are "master", the human supervisor and mediator of a multi-agent coding conversation — the highest authority in it. ' +
+      "The supervisor gives you an instruction in their own words; turn it into a clear, direct, authoritative message to the " +
+      "agent(s) that they are expected to follow, grounded in the conversation so far. " +
+      "Your message will be posted INTO THIS SAME channel and conversation and read by the agents already here. " +
+      "Keep all work in the current channel and conversation: do NOT tell agents to create, switch to, or open a new " +
+      "channel or conversation unless the supervisor's instruction explicitly asks for that. When the instruction says " +
+      'to "start something new", it means a new task WITHIN this conversation, not a new channel. ' +
+      "Output ONLY the message to send — no preamble, no quotes, no markdown fences." +
+      masterLangLine(locale),
     user:
-      `Conversation: ${conv.title}\nPurpose: ${conv.purpose || "(none)"}\n\n` +
+      `${masterContext(conv, members)}\n\n` +
       `Conversation so far (most recent last):\n${transcript}\n\n` +
       `Supervisor instruction:\n${instruction}\n\nWrite the message to send:`,
   };
 }
-function masterAnalyzePrompt(conv, transcript, instruction) {
+function masterAnalyzePrompt(conv, transcript, instruction, locale = null, members = []) {
   return {
     system:
       'You are "master", an analyst for the human supervisor of a multi-agent coding conversation. ' +
       "Read the conversation and answer the supervisor's question about it (e.g. whether the communication is " +
       "effective, what is going wrong, what criteria to apply). Be concise and structured. This is FOR THE " +
-      "SUPERVISOR ONLY and is NOT sent to the agents.",
+      "SUPERVISOR ONLY and is NOT sent to the agents." +
+      masterLangLine(locale),
     user:
-      `Conversation: ${conv.title}\nPurpose: ${conv.purpose || "(none)"}\n\n` +
+      `${masterContext(conv, members)}\n\n` +
       `Conversation so far (most recent last):\n${transcript}\n\n` +
       `Supervisor question:\n${instruction}\n\nYour analysis:`,
   };
@@ -207,6 +270,8 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
       createdBy,
     });
     if (agent) store.joinChannel(req.params.channel, agent.name);
+    // The state doc is seeded inside store.createConversation (so every creation
+    // path — route, auto-create, DM — gets the PROGRESS.md skeleton, never blank).
     broadcast({ type: "conversation.created", conversation: conv });
     res.json(conv);
   });
@@ -285,15 +350,45 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
       return res.status(409).json({ error: "no reviewer LLM configured (Settings → LLM provider)" });
     }
     const transcript = masterTranscript(store.readMessages({ conversationId: conv.id, since: 0 }));
+    const locale = config?.readConfig().locale ?? null;
+    const members = store.channelMembers(conv.channel).filter((n) => n !== "master");
     const prompt =
       mode === "analyze"
-        ? masterAnalyzePrompt(conv, transcript, instruction)
-        : masterComposePrompt(conv, transcript, instruction);
+        ? masterAnalyzePrompt(conv, transcript, instruction, locale, members)
+        : masterComposePrompt(conv, transcript, instruction, locale, members);
     try {
       const text = await reviewerComplete(prompt);
       res.json({ text });
     } catch (err) {
       res.status(502).json({ error: `master (${reviewer.backend}) error: ${err.message}` });
+    }
+  });
+
+  /* master code review — ONLY on explicit supervisor request. The relay runs
+   * read-only git (diff vs HEAD + status) in `dir` and the configured LLM reviews
+   * it. Returns the review text for the supervisor (who can then send it as master). */
+  api.post("/conversations/:id/master/review", async (req, res) => {
+    const conv = store.getConversation(req.params.id);
+    if (!conv) return res.status(404).json({ error: "conversation not found" });
+    const dir = req.body?.dir;
+    if (typeof dir !== "string" || !dir.trim()) {
+      return res.status(400).json({ error: "dir required (string): the repo directory to review" });
+    }
+    if (!reviewer?.available) {
+      return res.status(409).json({ error: "no reviewer LLM configured (Settings → LLM provider)" });
+    }
+    let git;
+    try {
+      git = await gitReview(dir.trim());
+    } catch (err) {
+      return res.status(400).json({ error: `git review failed (is "${dir}" a git repo?): ${err.message}` });
+    }
+    const locale = config?.readConfig().locale ?? null;
+    try {
+      const review = await reviewerComplete(masterReviewPrompt(conv, dir.trim(), git, locale));
+      res.json({ review, dir: dir.trim(), hasChanges: Boolean(git.diff || git.status), truncated: git.truncated });
+    } catch (err) {
+      res.status(502).json({ error: `master review (${reviewer.backend}) error: ${err.message}` });
     }
   });
 
@@ -424,7 +519,9 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     const rawTo = req.body?.to;
     const to = (Array.isArray(rawTo) ? rawTo : rawTo ? [rawTo] : [])
       .filter((n) => typeof n === "string" && n.length);
-    const unknown = to.filter((n) => !store.hasAgent(n));
+    // "master" is the human supervisor sentinel, not a registered agent: an agent
+    // may address it to reach the supervisor (who reads it in the monitor).
+    const unknown = to.filter((n) => n !== "master" && !store.hasAgent(n));
     if (unknown.length) {
       return res.status(400).json({ error: `unknown agent(s) in 'to': ${unknown.join(", ")}` });
     }
@@ -615,6 +712,7 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
       needed: !config.isSetupComplete(),
       configDir: config.dir,
       mode: store.getMode(),
+      locale: config.readConfig().locale ?? null,
       policy: config.readPolicy() ?? "",
       defaultPolicy: DEFAULT_POLICY,
       contracts: config.listContracts(),
@@ -789,6 +887,21 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     reviewer?.setPolicy?.(text);
     broadcast({ type: "policy.updated" });
     res.json({ policy: text });
+  });
+
+  /* The system language (e.g. "es" | "en"): drives the LLM reviewer's reason
+   * language so it matches the UI. Persisted in config.json; applied live to the
+   * reviewer without rebuilding the backend. */
+  api.put("/locale", (req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    const locale = req.body?.locale;
+    if (locale != null && (typeof locale !== "string" || !/^[a-z]{2}$/.test(locale))) {
+      return res.status(400).json({ error: "locale must be a 2-letter code (e.g. \"es\") or null" });
+    }
+    config.saveConfig({ locale: locale ?? null });
+    reviewer?.setLocale?.(locale ?? null);
+    broadcast({ type: "locale.updated", locale: locale ?? null });
+    res.json({ locale: locale ?? null });
   });
 
   app.use("/api", api);

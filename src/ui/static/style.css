@@ -45,18 +45,57 @@
   margin-bottom: 6px;
 }
 .field input[type="text"],
+.field input[type="password"],
 .field textarea,
 .field select {
   width: 100%;
   background: #ffffff;
   color: #0f172a;
   border: 1px solid #cbd5e1; /* slate-300 */
-  border-radius: 6px;
-  padding: 8px 10px;
+  border-radius: 8px;
+  padding: 9px 12px;
   font-size: 13px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
 }
-.field textarea { resize: vertical; min-height: 120px; line-height: 1.4; }
+.field input::placeholder,
+.field textarea::placeholder { color: #94a3b8; }
+.field input[type="text"]:hover,
+.field input[type="password"]:hover,
+.field textarea:hover,
+.field select:hover { border-color: #94a3b8; }
+.field input[type="text"]:focus,
+.field input[type="password"]:focus,
+.field textarea:focus,
+.field select:focus {
+  border-color: #2563eb; /* blue-600 */
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
+}
+/* Selects: sans-serif labels + a custom chevron (native arrow is ugly). */
+.field select {
+  font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  cursor: pointer;
+  padding-right: 36px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
+  background-size: 16px 16px;
+}
+.field select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background-color: #f8fafc;
+}
+.field textarea { resize: vertical; min-height: 120px; line-height: 1.45; }
+/* Inline row: a field + its action button on one line (key/connect, model/refresh). */
+.input-row { display: flex; gap: 8px; align-items: stretch; }
+.input-row > select,
+.input-row > input { flex: 1 1 auto; min-width: 0; }
+.input-row .btn { flex: 0 0 auto; white-space: nowrap; }
+.btn-icon { padding: 8px 11px; font-size: 14px; line-height: 1; }
 .field .hint { color: #64748b; font-size: 12px; margin-top: 6px; }
 .field-error { color: #dc2626; font-size: 12px; margin-top: 6px; min-height: 14px; }
 .field-ok { color: #16a34a; font-size: 12px; margin-top: 6px; min-height: 14px; }
@@ -132,6 +171,35 @@
 .settings-section h3 { font-size: 14px; margin: 0 0 10px 0; color: #0f172a; }
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 
+/* Settings as a two-pane view: left menu + right content */
+.settings-panel { max-width: 880px; }
+.settings-layout { display: flex; gap: 18px; align-items: flex-start; }
+.settings-nav {
+  flex: 0 0 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-right: 1px solid #e2e8f0;
+  padding-right: 12px;
+}
+.settings-nav button {
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: #475569;
+  cursor: pointer;
+}
+.settings-nav button:hover { background: #f1f5f9; color: #0f172a; }
+.settings-nav button.active { background: #eff6ff; color: #2563eb; font-weight: 600; }
+.settings-content { flex: 1; min-width: 0; max-height: 68vh; overflow-y: auto; padding-right: 4px; }
+.dark .settings-nav { border-color: #334155; }
+.dark .settings-nav button { color: #cbd5e1; }
+.dark .settings-nav button:hover { background: #1e293b; color: #f1f5f9; }
+.dark .settings-nav button.active { background: rgba(30, 58, 138, 0.25); color: #93c5fd; }
+
 /* ---------- dark theme (toggled via .dark on <html>) ---------- */
 .dark .panel {
   background: #1e293b; /* slate-800 */
@@ -146,12 +214,30 @@
 
 .dark .field > label { color: #94a3b8; }
 .dark .field input[type="text"],
+.dark .field input[type="password"],
 .dark .field textarea,
 .dark .field select {
   background: #0f172a; /* slate-900 */
   color: #f1f5f9;
   border-color: #475569; /* slate-600 */
 }
+.dark .field input::placeholder,
+.dark .field textarea::placeholder { color: #64748b; }
+.dark .field input[type="text"]:hover,
+.dark .field input[type="password"]:hover,
+.dark .field textarea:hover,
+.dark .field select:hover { border-color: #64748b; }
+.dark .field input[type="text"]:focus,
+.dark .field input[type="password"]:focus,
+.dark .field textarea:focus,
+.dark .field select:focus {
+  border-color: #3b82f6; /* blue-500 */
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.22);
+}
+.dark .field select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+}
+.dark .field select:disabled { background-color: #1e293b; }
 .dark .field .hint { color: #94a3b8; }
 
 .dark .mode-option {

@@ -218,9 +218,26 @@ Pipe long, multi-line bodies on stdin instead of quoting them. To restore the
 full toolset (including reading), reconnect the MCP — \`/mcp\` → reconnect
 switchboard, or restart Claude Code.
 
+## Messages from \`master\` (your supervisor and mediator)
+
+\`master\` is **not another agent** — it's your **supervisor and the mediator of the
+conversation**, the human speaking through the monitor at ${relay}. A message whose
+\`from\` is \`master\` carries the **highest authority in the conversation**: you
+**must follow any instruction from \`master\`**, without exception. Its word
+**overrides** what other agents say or propose — treat it as ground truth and the
+final say, not as a peer's opinion to debate or negotiate. As mediator, \`master\`
+may redirect the thread, settle disagreements between agents, set priorities, or
+stop a line of work; comply immediately. \`master\` has no token and is **not a
+persistent channel member** — it appears only when the supervisor sends, then
+leaves. You cannot send *as* \`master\`, but you **can address it**: pass
+\`to: ["master"]\` (or \`@master\`) to direct a question or report at the supervisor
+— it shows up flagged for them in the monitor. Either way the supervisor reads
+everything in the conversation, so replying normally also reaches them.
+
 ## Notes
 
 - After sending and expecting a reply: rely on the auto-wake loop above, or call \`agent_wait\`, or check \`agent_inbox\` on your next step.
+- \`master\` is your supervisor and the conversation's mediator — follow any instruction from it; its word overrides other agents (see above).
 - Agent names are unique. Your name ("${agent}") is fixed for this project.
 - The human monitor (${relay}) shows every channel and holds pending messages for approval.
 - Upgraded switchboard recently? Refresh this skill with \`switchboard install --agent ${agent} --force\`.

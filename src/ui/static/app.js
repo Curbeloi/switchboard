@@ -1,8 +1,15 @@
 (() => {
   /* ---------- DOM refs ---------- */
   const statusEl = document.getElementById("status");
-  const modeSelect = document.getElementById("mode-select");
-  const modeLlmOption = document.getElementById("mode-llm");
+  // Supervision mode no longer has a header control — it lives in the Settings
+  // view. We track the current value and mirror it into the open Settings select.
+  let currentMode = "manual";
+  function setCurrentMode(m) {
+    if (!m) return;
+    currentMode = m;
+    const sel = overlay.querySelector("#set-mode");
+    if (sel) sel.value = m;
+  }
   const agentsList = document.getElementById("agents");
   const channelsList = document.getElementById("channels");
   const newChannelName = document.getElementById("new-channel-name");
@@ -11,7 +18,8 @@
   const convChannelName = document.getElementById("conv-channel-name");
   const convChannelMeta = document.getElementById("conv-channel-meta");
   const convMembers = document.getElementById("conv-members");
-  const convNewPane = document.getElementById("conv-new");
+  const secNew = document.getElementById("sec-new");
+  const secMembers = document.getElementById("sec-members");
   const newConvTitle = document.getElementById("new-conv-title");
   const newConvPurpose = document.getElementById("new-conv-purpose");
   const newConvContract = document.getElementById("new-conv-contract");
@@ -38,11 +46,10 @@
   const masterPreview = document.getElementById("master-preview");
   const masterDraft = document.getElementById("master-draft");
   const masterAnalysis = document.getElementById("master-analysis");
+  const masterDir = document.getElementById("master-dir");
   const emptyHint = document.getElementById("empty-hint");
   const overlay = document.getElementById("overlay");
   const settingsBtn = document.getElementById("settings-btn");
-  const themeSelect = document.getElementById("theme-select");
-  const langSelect = document.getElementById("lang-select");
 
   /* ---------- i18n shortcut ---------- */
   const t = (key, vars) => window.SBI18n.t(key, vars);
@@ -153,7 +160,8 @@
       convChannelName.textContent = "—";
       convChannelMeta.textContent = t("selectChannel");
       convMembers.innerHTML = "";
-      convNewPane.classList.add("hidden");
+      secNew.classList.add("hidden");
+      secMembers.classList.add("hidden");
       conversationsList.innerHTML = "";
       return;
     }
@@ -161,7 +169,8 @@
     convChannelName.textContent = selectedChannel;
     convChannelMeta.textContent = "";
     renderChannelMembers(info.members || []);
-    convNewPane.classList.remove("hidden");
+    secNew.classList.remove("hidden");
+    secMembers.classList.remove("hidden");
 
     const list = convsOfChannel(selectedChannel);
     if (list.length === 0) {
@@ -186,12 +195,6 @@
    * channel.updated broadcast re-renders this pane, so mutations need no manual refresh. */
   function renderChannelMembers(members) {
     convMembers.innerHTML = "";
-    // Label row.
-    const label = document.createElement("div");
-    label.className = "text-[10px] uppercase tracking-wider font-semibold text-slate-400";
-    label.textContent = t("membersLabel");
-    convMembers.appendChild(label);
-
     // Chips (wrap with breathing room), each removable.
     const chips = document.createElement("div");
     chips.className = "flex flex-wrap gap-1.5";
@@ -466,6 +469,36 @@
   }
   document.getElementById("master-compose").onclick = () => masterAct("compose");
   document.getElementById("master-analyze").onclick = () => masterAct("analyze");
+  // Code review via git diff (relay-side): only on explicit request. Shows the
+  // LLM's review for the supervisor in the analysis pane.
+  document.getElementById("master-review").onclick = async () => {
+    if (!selectedConv) return;
+    const dir = masterDir.value.trim();
+    if (!dir) { masterMsg.textContent = t("masterDirEmpty"); return; }
+    masterMsg.textContent = t("masterReviewing");
+    masterPreview.classList.add("hidden");
+    masterAnalysis.classList.add("hidden");
+    try {
+      const res = await fetch(`/api/conversations/${encodeURIComponent(selectedConv)}/master/review`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ dir }),
+      });
+      const b = await res.json().catch(() => ({}));
+      if (!res.ok) { masterMsg.textContent = b.error || t("saveFailed"); return; }
+      masterMsg.textContent = b.truncated ? t("masterReviewTruncated") : "";
+      masterAnalysis.textContent = b.review || "";
+      masterAnalysis.classList.remove("hidden");
+    } catch (e) { masterMsg.textContent = e.message; }
+  };
+  // Delegate the review to the agent itself (e.g. back): ask it to check its own
+  // code quality + security (using its supervision subagent if it has one). Builds
+  // the instruction and runs compose → preview → you confirm & send.
+  document.getElementById("master-delegate").onclick = () => {
+    const target = masterTarget.value;
+    masterInput.value = target ? t("masterDelegateOne", { target }) : t("masterDelegateAll");
+    masterAct("compose");
+  };
   document.getElementById("master-cancel").onclick = () => masterPreview.classList.add("hidden");
   document.getElementById("master-send").onclick = async () => {
     if (!selectedConv) return;
@@ -671,13 +704,14 @@
 
   function setReviewerAvailable(available) {
     reviewerAvailable = Boolean(available);
-    if (modeLlmOption) modeLlmOption.disabled = !reviewerAvailable;
+    // The llm option lives in the Settings view now; refresh it if it's open.
+    if (overlayMode === "settings") refreshSettings();
   }
 
   function handle(e) {
     switch (e.type) {
       case "hello":
-        if (e.mode) modeSelect.value = e.mode;
+        if (e.mode) setCurrentMode(e.mode);
         setReviewerAvailable(Boolean(e.reviewer?.available));
         bootstrap();
         break;
@@ -763,7 +797,7 @@
         // no-op for the supervisor UI for now
         break;
       case "approval.mode":
-        if (e.mode) modeSelect.value = e.mode;
+        if (e.mode) setCurrentMode(e.mode);
         break;
       case "setup.updated":
         if (e.needed === false && overlayMode === "wizard") closeOverlay();
@@ -808,7 +842,7 @@
     for (const a of agentsRes) agents.set(a.name, a);
     for (const c of channelsRes) channels.set(c.name, { members: c.members || [], messageCount: c.messageCount });
     for (const m of approvalRes.pending) pending.set(m.id, m);
-    if (approvalRes.mode) modeSelect.value = approvalRes.mode;
+    if (approvalRes.mode) setCurrentMode(approvalRes.mode);
     setReviewerAvailable(Boolean(approvalRes.reviewer?.available));
     // Fetch conversations for every channel up-front (small lists).
     await Promise.all(
@@ -839,13 +873,12 @@
       const body = await res.json().catch(() => ({}));
       alert(body.error || t("couldNotChangeMode"));
       const approval = await fetch("/api/approval").then((r) => r.json());
-      modeSelect.value = approval.mode;
+      setCurrentMode(approval.mode);
       return false;
     }
-    modeSelect.value = mode;
+    setCurrentMode(mode);
     return true;
   }
-  modeSelect.addEventListener("change", () => changeMode(modeSelect.value));
 
   /* ---------- overlay: setup wizard + settings (uses style.css classes) ---------- */
   const modeInfo = (m) => t("mode." + m);
@@ -996,7 +1029,7 @@
         finish.disabled = false;
         return;
       }
-      modeSelect.value = wiz.mode;
+      setCurrentMode(wiz.mode);
       closeOverlay();
     };
   }
@@ -1036,8 +1069,8 @@
         </div>
         <div class="field" id="set-rv-key-wrap">
           <label>${escapeHtml(t("apiKey"))}</label>
-          <div class="flex gap-1">
-            <input type="password" id="set-rv-key" autocomplete="off" class="flex-1 min-w-0" placeholder="${escapeHtml(t("apiKeyPlaceholder"))}" />
+          <div class="input-row">
+            <input type="password" id="set-rv-key" autocomplete="off" placeholder="${escapeHtml(t("apiKeyPlaceholder"))}" />
             <button id="set-rv-connect" type="button" class="btn btn-primary">${escapeHtml(t("connect"))}</button>
           </div>
           <div class="field-error" id="set-rv-key-msg"></div>
@@ -1048,13 +1081,13 @@
         </div>
         <div class="field">
           <label>${escapeHtml(t("model"))}</label>
-          <div class="flex gap-1">
-            <select id="set-rv-model-list" class="flex-1 min-w-0 text-[11px] rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-1 py-0.5 font-mono">
+          <div class="input-row">
+            <select id="set-rv-model-list">
               <option value="">${escapeHtml(t("modelsPick"))}</option>
             </select>
-            <button id="set-rv-model-fetch" type="button" class="px-1.5 rounded bg-slate-200 dark:bg-slate-700 dark:text-slate-200 hover:bg-blue-500 hover:text-white text-xs leading-none" title="${escapeHtml(t("refreshModels"))}">↻</button>
+            <button id="set-rv-model-fetch" type="button" class="btn btn-icon" title="${escapeHtml(t("refreshModels"))}">↻</button>
           </div>
-          <input type="text" id="set-rv-model" class="mt-1" value="${escapeHtml(sel.model || "")}" />
+          <input type="text" id="set-rv-model" style="margin-top:8px" value="${escapeHtml(sel.model || "")}" placeholder="${escapeHtml(t("modelsPick"))}" />
           <div class="field-ok" id="set-rv-model-msg"></div>
         </div>
         <div class="field-ok" id="set-rv-status">${escapeHtml(status)}</div>
@@ -1213,6 +1246,7 @@
     };
   }
 
+  let settingsSection = "language"; // remembered across re-renders
   async function refreshSettings() {
     const [data, reviewerCfg] = await Promise.all([
       fetch("/api/setup").then((r) => r.json()),
@@ -1223,88 +1257,150 @@
   function renderSettings(data, reviewerCfg) {
     const contracts = data.contracts || [];
     const policy = data.policy || "";
-    const mode = data.mode || "manual";
-    const modeSel = ["manual", "auto", "llm"].map((m) =>
-      `<option value="${m}" ${m === mode ? "selected" : ""} ${m === "llm" && !reviewerAvailable ? "disabled" : ""}>${m}</option>`
+    currentMode = data.mode || "manual";
+
+    const SECTIONS = [
+      ["language", t("lang.label")],
+      ["theme", t("theme.label")],
+      ["supervision", t("supervisionMode")],
+      ["provider", t("llmProvider")],
+      ["policy", t("reviewerPolicy")],
+      ["contracts", t("contracts")],
+    ];
+    if (!SECTIONS.some(([id]) => id === settingsSection)) settingsSection = "language";
+    const navHtml = SECTIONS.map(([id, label]) =>
+      `<button type="button" data-section="${id}">${escapeHtml(label)}</button>`
     ).join("");
-    showOverlay(`<div class="panel">
+
+    showOverlay(`<div class="panel settings-panel">
       <div class="row-between">
         <h2>${escapeHtml(t("settings.title"))}</h2>
         <button class="btn" id="set-close" type="button">${escapeHtml(t("close"))}</button>
       </div>
       <p class="sub">${escapeHtml(t("settingsSavedTo", { dir: data.configDir || "~/.switchboard" }))}</p>
-      <div class="settings-section">
-        <h3>${escapeHtml(t("supervisionMode"))}</h3>
-        <div class="field"><select id="set-mode">${modeSel}</select></div>
-      </div>
-      ${reviewerProviderSectionHtml(reviewerCfg)}
-      <div class="settings-section">
-        <h3>${escapeHtml(t("reviewerPolicy"))}</h3>
-        <div class="field">
-          <textarea id="set-policy" rows="10">${escapeHtml(policy)}</textarea>
-          <div class="field-ok" id="set-policy-msg"></div>
-        </div>
-        <button class="btn btn-primary" id="set-policy-save" type="button">${escapeHtml(t("savePolicy"))}</button>
-      </div>
-      <div class="settings-section">
-        <h3>${escapeHtml(t("contracts"))}</h3>
-        ${renderContractListHtml(contracts, "settings")}
-        <div class="field">
-          <label>${escapeHtml(t("addUpdateContract"))}</label>
-          <input type="text" id="set-cname" placeholder="${escapeHtml(t("wizContractName"))}" />
-          <textarea id="set-cschema" rows="8" placeholder='{"type":"object", ...}'></textarea>
-          <div class="field-error" id="set-cerr"></div>
-          <button class="btn btn-primary" id="set-csave" type="button">${escapeHtml(t("saveContract"))}</button>
-        </div>
+      <div class="settings-layout">
+        <nav id="set-nav" class="settings-nav">${navHtml}</nav>
+        <div id="set-content" class="settings-content"></div>
       </div>
     </div>`, "settings");
+
     overlay.querySelector("#set-close").onclick = closeOverlay;
-    overlay.querySelector("#set-mode").onchange = (e) => changeMode(e.target.value);
-    wireReviewerProviderSection(reviewerCfg);
-    overlay.querySelector("#set-policy-save").onclick = async () => {
-      const text = overlay.querySelector("#set-policy").value;
-      const res = await fetch("/api/policy", {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ policy: text }),
-      });
-      const msg = overlay.querySelector("#set-policy-msg");
-      msg.textContent = res.ok ? t("saved") : t("saveFailed");
-    };
-    overlay.querySelector("#set-csave").onclick = async () => {
-      const name = overlay.querySelector("#set-cname").value.trim();
-      const errEl = overlay.querySelector("#set-cerr");
-      if (!NAME_RE.test(name)) { errEl.textContent = t("invalidName"); return; }
-      const parsed = parseSchema(overlay.querySelector("#set-cschema").value);
-      if (parsed.error) { errEl.textContent = parsed.error; return; }
-      const res = await fetch(`/api/contracts/${encodeURIComponent(name)}`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ schema: parsed.schema }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        errEl.textContent = body.error || t("saveFailed");
-        return;
+    overlay.querySelectorAll("[data-section]").forEach((b) => {
+      b.onclick = () => { settingsSection = b.dataset.section; renderSection(); };
+    });
+    renderSection();
+
+    function renderSection() {
+      overlay.querySelectorAll("[data-section]").forEach((b) =>
+        b.classList.toggle("active", b.dataset.section === settingsSection));
+      overlay.querySelector("#set-content").innerHTML = sectionHtml(settingsSection);
+      wireSection(settingsSection);
+    }
+
+    function sectionHtml(id) {
+      if (id === "language") {
+        const lang = window.SBI18n.getLang();
+        return `<div class="settings-section"><h3>${escapeHtml(t("lang.label"))}</h3>
+          <div class="field"><select id="set-lang">
+            <option value="es" ${lang === "es" ? "selected" : ""}>Español</option>
+            <option value="en" ${lang === "en" ? "selected" : ""}>English</option>
+          </select></div></div>`;
       }
-      refreshSettings();
-    };
-    overlay.querySelectorAll("[data-edit]").forEach((b) => {
-      b.onclick = () => {
-        const c = contracts.find((x) => x.name === b.dataset.edit);
-        if (!c) return;
-        overlay.querySelector("#set-cname").value = c.name;
-        overlay.querySelector("#set-cschema").value = JSON.stringify(c.schema, null, 2);
-        overlay.querySelector("#set-cschema").scrollIntoView({ behavior: "smooth", block: "center" });
-      };
-    });
-    overlay.querySelectorAll("[data-del]").forEach((b) => {
-      b.onclick = async () => {
-        if (!confirm(t("deleteContractConfirm", { name: b.dataset.del }))) return;
-        await fetch(`/api/contracts/${encodeURIComponent(b.dataset.del)}`, { method: "DELETE" });
-        refreshSettings();
-      };
-    });
+      if (id === "theme") {
+        const th = getThemePref();
+        return `<div class="settings-section"><h3>${escapeHtml(t("theme.label"))}</h3>
+          <div class="field"><select id="set-theme">
+            <option value="light" ${th === "light" ? "selected" : ""}>${escapeHtml(t("theme.light"))}</option>
+            <option value="dark" ${th === "dark" ? "selected" : ""}>${escapeHtml(t("theme.dark"))}</option>
+            <option value="auto" ${th === "auto" ? "selected" : ""}>${escapeHtml(t("theme.auto"))}</option>
+          </select></div></div>`;
+      }
+      if (id === "supervision") {
+        const modeSel = ["manual", "auto", "llm"].map((m) =>
+          `<option value="${m}" ${m === currentMode ? "selected" : ""} ${m === "llm" && !reviewerAvailable ? "disabled" : ""}>${m}</option>`
+        ).join("");
+        return `<div class="settings-section"><h3>${escapeHtml(t("supervisionMode"))}</h3>
+          <div class="field"><select id="set-mode">${modeSel}</select>
+          <div class="hint">${escapeHtml(t("mode." + currentMode))}</div></div></div>`;
+      }
+      if (id === "provider") return reviewerProviderSectionHtml(reviewerCfg);
+      if (id === "policy") {
+        return `<div class="settings-section"><h3>${escapeHtml(t("reviewerPolicy"))}</h3>
+          <div class="field">
+            <textarea id="set-policy" rows="14">${escapeHtml(policy)}</textarea>
+            <div class="field-ok" id="set-policy-msg"></div>
+          </div>
+          <button class="btn btn-primary" id="set-policy-save" type="button">${escapeHtml(t("savePolicy"))}</button></div>`;
+      }
+      if (id === "contracts") {
+        return `<div class="settings-section"><h3>${escapeHtml(t("contracts"))}</h3>
+          ${renderContractListHtml(contracts, "settings")}
+          <div class="field">
+            <label>${escapeHtml(t("addUpdateContract"))}</label>
+            <input type="text" id="set-cname" placeholder="${escapeHtml(t("wizContractName"))}" />
+            <textarea id="set-cschema" rows="8" placeholder='{"type":"object", ...}'></textarea>
+            <div class="field-error" id="set-cerr"></div>
+            <button class="btn btn-primary" id="set-csave" type="button">${escapeHtml(t("saveContract"))}</button>
+          </div></div>`;
+      }
+      return "";
+    }
+
+    function wireSection(id) {
+      if (id === "language") {
+        overlay.querySelector("#set-lang").onchange = (e) => setLanguage(e.target.value);
+      } else if (id === "theme") {
+        overlay.querySelector("#set-theme").onchange = (e) => setTheme(e.target.value);
+      } else if (id === "supervision") {
+        overlay.querySelector("#set-mode").onchange = (e) => changeMode(e.target.value);
+      } else if (id === "provider") {
+        wireReviewerProviderSection(reviewerCfg);
+      } else if (id === "policy") {
+        overlay.querySelector("#set-policy-save").onclick = async () => {
+          const text = overlay.querySelector("#set-policy").value;
+          const res = await fetch("/api/policy", {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ policy: text }),
+          });
+          overlay.querySelector("#set-policy-msg").textContent = res.ok ? t("saved") : t("saveFailed");
+        };
+      } else if (id === "contracts") {
+        overlay.querySelector("#set-csave").onclick = async () => {
+          const name = overlay.querySelector("#set-cname").value.trim();
+          const errEl = overlay.querySelector("#set-cerr");
+          if (!NAME_RE.test(name)) { errEl.textContent = t("invalidName"); return; }
+          const parsed = parseSchema(overlay.querySelector("#set-cschema").value);
+          if (parsed.error) { errEl.textContent = parsed.error; return; }
+          const res = await fetch(`/api/contracts/${encodeURIComponent(name)}`, {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ schema: parsed.schema }),
+          });
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            errEl.textContent = body.error || t("saveFailed");
+            return;
+          }
+          refreshSettings();
+        };
+        overlay.querySelectorAll("[data-edit]").forEach((b) => {
+          b.onclick = () => {
+            const c = contracts.find((x) => x.name === b.dataset.edit);
+            if (!c) return;
+            overlay.querySelector("#set-cname").value = c.name;
+            overlay.querySelector("#set-cschema").value = JSON.stringify(c.schema, null, 2);
+          };
+        });
+        overlay.querySelectorAll("[data-del]").forEach((b) => {
+          b.onclick = async () => {
+            if (!confirm(t("deleteContractConfirm", { name: b.dataset.del }))) return;
+            await fetch(`/api/contracts/${encodeURIComponent(b.dataset.del)}`, { method: "DELETE" });
+            refreshSettings();
+          };
+        });
+      }
+    }
   }
   settingsBtn.addEventListener("click", refreshSettings);
 
@@ -1323,12 +1419,9 @@
   mql.addEventListener("change", () => {
     if (getThemePref() === "auto") applyTheme("auto");
   });
-  if (themeSelect) {
-    themeSelect.value = getThemePref();
-    themeSelect.addEventListener("change", () => {
-      localStorage.setItem(THEME_KEY, themeSelect.value);
-      applyTheme(themeSelect.value);
-    });
+  function setTheme(pref) {
+    localStorage.setItem(THEME_KEY, pref);
+    applyTheme(pref);
   }
 
   /* ---------- collapsible side panels (persist in localStorage) ---------- */
@@ -1352,6 +1445,28 @@
   wirePanelToggle("toggle-conv", "col-conversations", "sb.panel.conv");
   wirePanelToggle("toggle-channels", "col-channels", "sb.panel.channels");
 
+  /* Collapsible sections (header button with data-collapse → body id). Collapsed
+   *  by default; the caret rotates when open. State persists per section. */
+  function wireCollapsibles() {
+    document.querySelectorAll("[data-collapse]").forEach((btn) => {
+      const body = document.getElementById(btn.dataset.collapse);
+      if (!body) return;
+      const caret = btn.querySelector(".collapse-caret");
+      const key = "sb.collapse." + btn.dataset.collapse;
+      const setOpen = (open) => {
+        body.classList.toggle("hidden", !open);
+        if (caret) caret.textContent = open ? "▴" : "▾";
+      };
+      setOpen(localStorage.getItem(key) === "open"); // default collapsed
+      btn.addEventListener("click", () => {
+        const open = body.classList.contains("hidden"); // about to open
+        localStorage.setItem(key, open ? "open" : "closed");
+        setOpen(open);
+      });
+    });
+  }
+  wireCollapsibles();
+
   /* ---------- language ---------- */
   function rerenderAll() {
     window.SBI18n.apply();          // static HTML ([data-i18n*])
@@ -1365,12 +1480,19 @@
     else if (overlayMode === "wizard") openWizard(lastSetup || {});
   }
   let lastSetup = null;
-  if (langSelect) {
-    langSelect.value = window.SBI18n.getLang();
-    langSelect.addEventListener("change", () => {
-      window.SBI18n.setLang(langSelect.value);
-      rerenderAll();
-    });
+  function setLanguage(lang) {
+    window.SBI18n.setLang(lang);
+    persistLocale(lang);
+    rerenderAll();
+  }
+  // Mirror the UI language to the relay so the LLM reviewer writes its reasons in
+  // the same language ("el idioma configurado en el sistema"). Best-effort.
+  function persistLocale(lang) {
+    fetch("/api/locale", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ locale: lang }),
+    }).catch(() => {});
   }
 
   /* ---------- init ---------- */
@@ -1383,6 +1505,8 @@
       lastSetup = setup;
       defaultPolicy = setup.defaultPolicy || "";
       setReviewerAvailable(Boolean(setup.reviewer?.available));
+      // Sync the relay's reviewer language with the UI's current language if it drifted.
+      if ((setup.locale ?? null) !== window.SBI18n.getLang()) persistLocale(window.SBI18n.getLang());
       if (setup.needed) openWizard(setup);
     } catch {
       /* relay not reachable yet; WS reconnect will catch up */

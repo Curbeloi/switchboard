@@ -22,35 +22,12 @@
     <header class="h-12 flex-shrink-0 border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 flex items-center justify-between">
       <div class="flex items-center gap-2">
         <h1 class="text-base font-semibold tracking-wide text-slate-900 dark:text-slate-100" data-i18n="app.title">switchboard</h1>
-        <button id="toggle-channels" class="text-sm rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-0.5 hover:border-blue-500 hover:text-blue-600" data-i18n-title="toggleChannels" title="channels panel">◧</button>
-        <button id="toggle-conv" class="text-sm rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-0.5 hover:border-blue-500 hover:text-blue-600" data-i18n-title="toggleConversations" title="conversations panel">◨</button>
+        <button id="toggle-channels" class="text-lg leading-none rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 hover:border-blue-500 hover:text-blue-600" data-i18n-title="toggleChannels" title="channels panel">◧</button>
+        <button id="toggle-conv" class="text-lg leading-none rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 hover:border-blue-500 hover:text-blue-600" data-i18n-title="toggleConversations" title="conversations panel">◨</button>
       </div>
-      <div class="flex items-center gap-3">
-        <label class="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-          <span data-i18n="lang.label">Language</span>
-          <select id="lang-select" class="text-sm rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1">
-            <option value="es">Español</option>
-            <option value="en">English</option>
-          </select>
-        </label>
-        <label class="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-          <span data-i18n="theme.label">Theme</span>
-          <select id="theme-select" class="text-sm rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1">
-            <option value="light" data-i18n="theme.light">light</option>
-            <option value="dark" data-i18n="theme.dark">dark</option>
-            <option value="auto" data-i18n="theme.auto">auto</option>
-          </select>
-        </label>
-        <label class="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-          <span data-i18n="mode.label">Mode</span>
-          <select id="mode-select" class="text-sm rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 font-mono">
-            <option value="manual">manual</option>
-            <option value="auto">auto</option>
-            <option value="llm" id="mode-llm">llm</option>
-          </select>
-        </label>
-        <button id="settings-btn" class="text-sm rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2.5 py-1 hover:border-blue-500 hover:text-blue-600" data-i18n="settings">⚙ Settings</button>
+      <div class="flex items-center gap-2">
         <span id="status" class="text-xs px-2.5 py-1 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-mono">connecting…</span>
+        <button id="settings-btn" class="text-xl leading-none rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 hover:border-blue-500 hover:text-blue-600" data-i18n-title="settings" title="Settings">⚙︎</button>
       </div>
     </header>
 
@@ -78,16 +55,35 @@
         <div id="conv-header" class="px-3 py-2 border-b border-slate-200 dark:border-slate-700">
           <h2 id="conv-channel-name" class="font-mono text-sm text-slate-700 dark:text-slate-200">—</h2>
           <p id="conv-channel-meta" class="text-[11px] text-slate-400 font-mono mt-0.5" data-i18n="selectChannel">select a channel</p>
-          <div id="conv-members" class="mt-2 space-y-1.5"></div>
         </div>
-        <div id="conv-new" class="px-3 py-2 border-b border-slate-200 dark:border-slate-700 hidden">
-          <input type="text" id="new-conv-title" data-i18n-placeholder="newConvTitle" placeholder="new conversation title…" class="w-full text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 font-mono" />
-          <input type="text" id="new-conv-purpose" data-i18n-placeholder="newConvPurpose" placeholder="purpose (optional)" class="w-full text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 mt-1" />
-          <select id="new-conv-contract" class="w-full text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 mt-1 font-mono" title="optional contract (DSP-style governance)">
-            <option value="" data-i18n="noContract">no contract</option>
-          </select>
-          <button id="new-conv-btn" class="mt-1 w-full rounded bg-blue-500 hover:bg-blue-600 text-white text-xs py-1 font-semibold" data-i18n="openConversation">+ Open conversation</button>
-        </div>
+
+        <!-- Collapsible: create a new conversation (first, above the list) -->
+        <section id="sec-new" class="border-b border-slate-200 dark:border-slate-700 hidden">
+          <button type="button" class="collapse-toggle w-full flex items-center justify-between px-3 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-700/40" data-collapse="conv-new">
+            <span class="text-[10px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400" data-i18n="newConversation">New conversation</span>
+            <span class="collapse-caret text-slate-400 text-[10px]">▾</span>
+          </button>
+          <div id="conv-new" class="hidden px-3 pb-3">
+            <input type="text" id="new-conv-title" data-i18n-placeholder="newConvTitle" placeholder="new conversation title…" class="w-full text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 font-mono" />
+            <input type="text" id="new-conv-purpose" data-i18n-placeholder="newConvPurpose" placeholder="purpose (optional)" class="w-full text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 mt-1" />
+            <select id="new-conv-contract" class="w-full text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 mt-1 font-mono" title="optional contract (DSP-style governance)">
+              <option value="" data-i18n="noContract">no contract</option>
+            </select>
+            <button id="new-conv-btn" class="mt-1 w-full rounded bg-blue-500 hover:bg-blue-600 text-white text-xs py-1 font-semibold" data-i18n="openConversation">+ Open conversation</button>
+          </div>
+        </section>
+
+        <!-- Collapsible: channel agents (add / remove members) -->
+        <section id="sec-members" class="border-b border-slate-200 dark:border-slate-700 hidden">
+          <button type="button" class="collapse-toggle w-full flex items-center justify-between px-3 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-700/40" data-collapse="conv-members-body">
+            <span class="text-[10px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400" data-i18n="agentsSection">Agents</span>
+            <span class="collapse-caret text-slate-400 text-[10px]">▾</span>
+          </button>
+          <div id="conv-members-body" class="hidden px-3 pb-3">
+            <div id="conv-members" class="space-y-1.5"></div>
+          </div>
+        </section>
+
         <ul id="conversations" class="flex-1 overflow-y-auto px-2 py-2 space-y-1"></ul>
       </aside>
 
@@ -136,9 +132,14 @@
             <span id="master-msg" class="text-[11px] text-slate-500 dark:text-slate-400"></span>
           </div>
           <textarea id="master-input" rows="2" class="w-full text-sm rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1" data-i18n-placeholder="masterPlaceholder" placeholder="instruction for master…"></textarea>
-          <div class="mt-1 flex gap-2">
-            <button id="master-compose" class="rounded bg-purple-600 hover:bg-purple-700 text-white text-xs px-3 py-1 font-semibold" data-i18n="masterCompose">Compose…</button>
-            <button id="master-analyze" class="rounded border border-purple-400 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/30 text-xs px-3 py-1 font-semibold" data-i18n="masterAnalyze">Analyze</button>
+          <div class="mt-1 flex gap-2 flex-wrap">
+            <button id="master-compose" class="rounded bg-blue-500 hover:bg-blue-600 text-white text-xs px-4 py-1 font-semibold whitespace-nowrap shrink-0" data-i18n="masterCompose">Compose…</button>
+            <button id="master-analyze" class="rounded border border-purple-400 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/30 text-xs px-4 py-1 font-semibold whitespace-nowrap shrink-0" data-i18n="masterAnalyze">Analyze</button>
+            <button id="master-delegate" class="rounded border border-purple-400 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/30 text-xs px-4 py-1 font-semibold whitespace-nowrap shrink-0" data-i18n="masterDelegate">Ask agent to review</button>
+          </div>
+          <div class="mt-2 flex gap-2 items-center">
+            <input type="text" id="master-dir" class="flex-1 min-w-0 text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 font-mono" data-i18n-placeholder="masterDirPlaceholder" placeholder="/ruta/al/repo a revisar (git diff)" />
+            <button id="master-review" class="rounded border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:border-blue-500 hover:text-blue-600 text-xs px-4 py-1 font-semibold whitespace-nowrap shrink-0" data-i18n="masterReview">Review code</button>
           </div>
           <div id="master-preview" class="hidden mt-2 rounded border border-purple-300 dark:border-purple-700 bg-purple-50 dark:bg-purple-900/20 p-2">
             <div class="text-[10px] uppercase tracking-wider font-semibold text-purple-600 dark:text-purple-400 mb-1" data-i18n="masterPreview">Preview — edit before sending</div>
@@ -148,7 +149,7 @@
               <button id="master-cancel" class="rounded border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 text-xs px-3 py-1" data-i18n="masterCancel">Cancel</button>
             </div>
           </div>
-          <div id="master-analysis" class="hidden mt-2 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 p-2 text-xs whitespace-pre-wrap text-slate-700 dark:text-slate-200"></div>
+          <div id="master-analysis" class="hidden mt-2 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 p-2 text-xs whitespace-pre-wrap text-slate-700 dark:text-slate-200 max-h-60 overflow-y-auto"></div>
         </div>
       </section>
     </main>
