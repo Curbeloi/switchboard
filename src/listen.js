@@ -94,14 +94,22 @@ export async function runListen({
       if (allow.size && !allow.has(ch.name)) continue; // allowlist: only these
       if (deny.has(ch.name)) continue; // denylist: never these
       const isMyDm = ch.name.startsWith("dm:");
-      const msgs = await getJson(
-        `/api/channels/${encodeURIComponent(ch.name)}/messages?since=${since}`
+      // Messages live in conversations (v3+); enumerate every conversation in the
+      // channel and poll its delivered messages. (The pre-v3 channel-messages
+      // endpoint is gone — hitting it returned 410 and broke wake detection.)
+      const convs = await getJson(
+        `/api/channels/${encodeURIComponent(ch.name)}/conversations?status=all`
       );
-      for (const m of msgs) {
-        if (m.createdAt > maxSeen) maxSeen = m.createdAt;
-        if (m.from === agent) continue; // ignore our own posts
-        const addressed = (Array.isArray(m.to) && m.to.includes(agent)) || isMyDm;
-        if (all || addressed) hits.push(m);
+      for (const conv of convs) {
+        const msgs = await getJson(
+          `/api/conversations/${encodeURIComponent(conv.id)}/messages?since=${since}`
+        );
+        for (const m of msgs) {
+          if (m.createdAt > maxSeen) maxSeen = m.createdAt;
+          if (m.from === agent) continue; // ignore our own posts
+          const addressed = (Array.isArray(m.to) && m.to.includes(agent)) || isMyDm;
+          if (all || addressed) hits.push(m);
+        }
       }
     }
     hits.sort((a, b) => a.createdAt - b.createdAt);
