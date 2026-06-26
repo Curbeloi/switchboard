@@ -26,10 +26,14 @@ export async function startRelay({
   if (saved.mode) {
     try { store.setMode(saved.mode); } catch { /* ignore invalid persisted mode */ }
   }
+  // Reviewer provider config persisted via Settings (provider/model/keys/baseUrl).
   // Policy precedence: --review-policy flag > persisted policy.md > built-in default.
+  // Model precedence: --review-model flag > persisted reviewer.model > provider default.
+  const reviewerCfg = config.readReviewerConfig();
   const reviewer = createReviewer({
+    ...reviewerCfg,
     policy: reviewPolicy ?? config.readPolicy() ?? undefined,
-    model: reviewModel,
+    model: reviewModel ?? reviewerCfg.model,
   });
   const app = express();
   app.use(express.json({ limit: "1mb" }));
@@ -57,30 +61,32 @@ export async function startRelay({
 
   /* In "llm" mode, the reviewer drains the pending queue automatically:
    *  approve/reject deliver or drop the message; escalate leaves it pending
-   *  for a human. Reviewer failures escalate (fail safe) — never auto-approve. */
-  if (reviewer.available) {
-    subscribe(async (event) => {
-      if (event.type !== "message.pending") return;
-      if (store.getMode() !== "llm") return;
-      const msg = event.message;
-      // Enrich the reviewer's view with the conversation's active contract,
-      // so the policy can judge intent (DSP v1 contract awareness).
-      const conv = store.getConversation(msg.conversationId);
-      const enriched = { ...msg, contract_name: conv?.contract_name ?? null };
-      const { decision, reason } = await reviewer.review(enriched);
-      const review = { decision, reason, at: Date.now(), by: reviewer.backend };
-      if (decision === "approve") {
-        const delivered = store.approvePending(msg.id, review);
-        if (delivered) broadcast({ type: "message.delivered", message: delivered });
-      } else if (decision === "reject") {
-        const rejected = store.rejectPending(msg.id, review);
-        if (rejected) broadcast({ type: "message.rejected", message: rejected });
-      } else {
-        const escalated = store.markEscalated(msg.id, reason);
-        if (escalated) broadcast({ type: "message.escalated", message: escalated });
-      }
-    });
-  }
+   *  for a human. Reviewer failures escalate (fail safe) — never auto-approve.
+   *  Always subscribed (availability is checked per-event) so switching the
+   *  provider on from Settings at runtime takes effect without a restart. */
+  subscribe(async (event) => {
+    if (event.type !== "message.pending") return;
+    if (store.getMode() !== "llm") return;
+    const msg = event.message;
+    // Enrich the reviewer's view with the conversation's active contract,
+    // so the policy can judge intent (DSP v1 contract awareness).
+    const conv = store.getConversation(msg.conversationId);
+    const enriched = { ...msg, contract_name: conv?.contract_name ?? null };
+    const { decision, reason } = reviewer.available
+      ? await reviewer.review(enriched)
+      : { decision: "escalate", reason: "llm mode on but no reviewer available" };
+    const review = { decision, reason, at: Date.now(), by: reviewer.backend ?? "reviewer" };
+    if (decision === "approve") {
+      const delivered = store.approvePending(msg.id, review);
+      if (delivered) broadcast({ type: "message.delivered", message: delivered });
+    } else if (decision === "reject") {
+      const rejected = store.rejectPending(msg.id, review);
+      if (rejected) broadcast({ type: "message.rejected", message: rejected });
+    } else {
+      const escalated = store.markEscalated(msg.id, reason);
+      if (escalated) broadcast({ type: "message.escalated", message: escalated });
+    }
+  });
 
   /* Static supervision UI */
   app.use("/", express.static(STATIC_DIR));
@@ -94,7 +100,12 @@ export async function startRelay({
       JSON.stringify({
         type: "hello",
         mode: store.getMode(),
-        reviewer: { available: reviewer.available, backend: reviewer.backend },
+        reviewer: {
+          available: reviewer.available,
+          backend: reviewer.backend,
+          provider: reviewer.provider,
+          model: reviewer.model,
+        },
       })
     );
     ws.on("close", () => subscribers.delete(ws));
@@ -109,8 +120,8 @@ export async function startRelay({
       process.stdout.write(`  WebSocket:       ws://${host}:${port}/subscribe\n`);
       process.stdout.write(
         reviewer.available
-          ? `  LLM reviewer:    available (${reviewer.backend}) — 'llm' mode enabled\n`
-          : `  LLM reviewer:    unavailable (no ANTHROPIC_API_KEY and no claude CLI) — 'llm' mode disabled\n`
+          ? `  LLM reviewer:    available (${reviewer.backend}${reviewer.model ? `, ${reviewer.model}` : ""}) — 'llm' mode enabled\n`
+          : `  LLM reviewer:    unavailable — pick a provider in Settings (or set ANTHROPIC_API_KEY / install claude CLI), then 'llm' mode enables\n`
       );
       resolve({ server, store, broadcast, subscribe, reviewer, config });
     });

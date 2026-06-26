@@ -7,6 +7,7 @@ import {
   writeFileSync,
   readdirSync,
   rmSync,
+  chmodSync,
 } from "node:fs";
 
 /**
@@ -148,11 +149,39 @@ export function createConfigStore(dir = DEFAULT_CONFIG_DIR) {
     writeFileSync(policyPath, typeof text === "string" ? text : "");
   }
 
-  function saveConfig(patch) {
+  function writeConfig(next) {
     ensureDir();
-    const next = { ...readConfig(), ...patch };
     writeFileSync(configPath, JSON.stringify(next, null, 2));
+    // config.json may hold reviewer API keys — keep it owner-only.
+    try { chmodSync(configPath, 0o600); } catch { /* best effort (e.g. Windows) */ }
     return next;
+  }
+
+  function saveConfig(patch) {
+    return writeConfig({ ...readConfig(), ...patch });
+  }
+
+  /** The reviewer (LLM supervision) provider config: provider, model, baseUrl,
+   *  and per-provider API keys. Never exposed raw over the API — routes return
+   *  only which keys are SET. */
+  function readReviewerConfig() {
+    return readConfig().reviewer ?? {};
+  }
+
+  /** Merge a patch into the persisted reviewer config. `keys` is merged per
+   *  provider (so switching providers preserves each key). Switching provider
+   *  without naming a model clears the stale model so the new provider's default
+   *  applies. */
+  function saveReviewerConfig(patch = {}) {
+    const cur = readConfig();
+    const prev = cur.reviewer ?? {};
+    const reviewer = { ...prev, ...patch };
+    if (patch.keys) reviewer.keys = { ...(prev.keys ?? {}), ...patch.keys };
+    if (patch.provider && patch.provider !== prev.provider && !("model" in patch)) {
+      delete reviewer.model;
+    }
+    writeConfig({ ...cur, reviewer });
+    return reviewer;
   }
 
   return {
@@ -170,5 +199,7 @@ export function createConfigStore(dir = DEFAULT_CONFIG_DIR) {
     deleteContract,
     savePolicy,
     saveConfig,
+    readReviewerConfig,
+    saveReviewerConfig,
   };
 }

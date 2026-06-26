@@ -17,7 +17,7 @@
     "start": "node bin/switchboard.js start",
     "mcp": "node bin/switchboard.js mcp",
     "dev": "node --watch bin/switchboard.js start",
-    "test": "node --test tests/",
+    "test": "node --test",
     "tailwind:build": "tailwindcss -i src/ui/static/tailwind.input.css -o src/ui/static/tailwind.css --minify",
     "tailwind:watch": "tailwindcss -i src/ui/static/tailwind.input.css -o src/ui/static/tailwind.css --watch"
   },
