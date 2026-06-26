@@ -10,3 +10,6 @@ data/
 # Claude Code dev artifacts (kept locally, not committed/published)
 CLAUDE.md
 .claude/
+
+# sdd-kit cache
+.sdd/
