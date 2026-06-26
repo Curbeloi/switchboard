@@ -1,6 +1,6 @@
 import { Router } from "express";
 import Ajv from "ajv";
-import { DEFAULT_POLICY } from "../reviewer.js";
+import { DEFAULT_POLICY, REVIEWER_PROVIDERS, listModels, reviewerCliAvailability, complete } from "../reviewer.js";
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 
@@ -25,10 +25,49 @@ const publicAgent = (a) => ({
 
 const STATE_MAX_BYTES = 64 * 1024;
 
+/* ---- "master" mediator prompts (pure helpers) ---- */
+const MASTER_TRANSCRIPT_MAX = 40;
+function masterTranscript(messages) {
+  const recent = messages.slice(-MASTER_TRANSCRIPT_MAX);
+  if (!recent.length) return "(no messages yet)";
+  return recent.map((m) => `${m.from}: ${String(m.content || "").replace(/\s+/g, " ")}`).join("\n");
+}
+function masterComposePrompt(conv, transcript, instruction) {
+  return {
+    system:
+      'You are "master", the human supervisor\'s voice inside a multi-agent coding conversation. ' +
+      "The supervisor gives you an instruction in their own words; turn it into a clear, direct message to the " +
+      "agent(s), grounded in the conversation so far. Output ONLY the message to send — no preamble, no quotes, no markdown fences.",
+    user:
+      `Conversation: ${conv.title}\nPurpose: ${conv.purpose || "(none)"}\n\n` +
+      `Conversation so far (most recent last):\n${transcript}\n\n` +
+      `Supervisor instruction:\n${instruction}\n\nWrite the message to send:`,
+  };
+}
+function masterAnalyzePrompt(conv, transcript, instruction) {
+  return {
+    system:
+      'You are "master", an analyst for the human supervisor of a multi-agent coding conversation. ' +
+      "Read the conversation and answer the supervisor's question about it (e.g. whether the communication is " +
+      "effective, what is going wrong, what criteria to apply). Be concise and structured. This is FOR THE " +
+      "SUPERVISOR ONLY and is NOT sent to the agents.",
+    user:
+      `Conversation: ${conv.title}\nPurpose: ${conv.purpose || "(none)"}\n\n` +
+      `Conversation so far (most recent last):\n${transcript}\n\n` +
+      `Supervisor question:\n${instruction}\n\nYour analysis:`,
+  };
+}
+
 export function mountRoutes(app, { store, broadcast, reviewer = null, config = null }) {
   const api = Router();
-  const reviewerAvailable = Boolean(reviewer?.available);
-  const reviewerInfo = { available: reviewerAvailable, backend: reviewer?.backend ?? null };
+  /* Dynamic: the reviewer can be reconfigured at runtime (provider switched from
+   *  Settings), so availability/backend must be read per request, not captured. */
+  const reviewerInfo = () => ({
+    available: Boolean(reviewer?.available),
+    backend: reviewer?.backend ?? null,
+    provider: reviewer?.provider ?? null,
+    model: reviewer?.model ?? null,
+  });
 
   function requireAgent(req, res) {
     const auth = req.get("authorization");
@@ -53,7 +92,7 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
 
   /* Health */
   api.get("/health", (_req, res) => {
-    res.json({ ok: true, mode: store.getMode(), reviewer: reviewerInfo });
+    res.json({ ok: true, mode: store.getMode(), reviewer: reviewerInfo() });
   });
 
   /* Agents */
@@ -110,6 +149,27 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     if (!result) return res.status(404).json({ error: "channel not found" });
     broadcast({ type: "channel.updated", channel: result });
     res.json(result);
+  });
+
+  /* Supervisor-driven membership (human surface, no token) — the web equivalent
+   * of the REPL's addto/removefrom: add or remove a registered agent. */
+  api.post("/channels/:channel/members", (req, res) => {
+    const { agent } = req.body ?? {};
+    if (!agent || typeof agent !== "string") {
+      return res.status(400).json({ error: "agent required (string)" });
+    }
+    if (!store.hasAgent(agent)) {
+      return res.status(404).json({ error: `unknown agent "${agent}" (not registered)` });
+    }
+    const channel = store.joinChannel(req.params.channel, agent);
+    broadcast({ type: "channel.updated", channel });
+    res.json(channel);
+  });
+  api.delete("/channels/:channel/members/:agent", (req, res) => {
+    const channel = store.leaveChannel(req.params.channel, req.params.agent);
+    if (!channel) return res.status(404).json({ error: "channel not found" });
+    broadcast({ type: "channel.updated", channel });
+    res.json(channel);
   });
 
   /* Conversations (threads inside a channel) — every loop lives in one.
@@ -192,6 +252,80 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     if (!conv) return res.status(404).json({ error: "conversation not found or already closed" });
     broadcast({ type: "conversation.closed", conversation: conv });
     res.json(conv);
+  });
+
+  /* "master" — an LLM-mediated supervisor presence (human surface, no token).
+   * POST /master  → compose (draft a message to agents) or analyze (for the human
+   *                 only); both use the configured reviewer LLM. Nothing is posted.
+   * POST /master/send → post the confirmed text into the conversation as "master",
+   *                 delivered immediately and addressed so the listener wakes agents. */
+  async function reviewerComplete({ system, user }) {
+    const provider = reviewer.provider;
+    return complete(provider, {
+      key: resolveProviderKey(provider),
+      baseUrl: config?.readReviewerConfig().baseUrl,
+      model: reviewer.model,
+      system,
+      user,
+    });
+  }
+
+  api.post("/conversations/:id/master", async (req, res) => {
+    const conv = store.getConversation(req.params.id);
+    if (!conv) return res.status(404).json({ error: "conversation not found" });
+    const { mode = "compose", instruction, verbatim = false } = req.body ?? {};
+    if (typeof instruction !== "string" || !instruction.trim()) {
+      return res.status(400).json({ error: "instruction required (string)" });
+    }
+    if (!["compose", "analyze"].includes(mode)) {
+      return res.status(400).json({ error: "mode must be compose | analyze" });
+    }
+    if (mode === "compose" && verbatim) return res.json({ text: instruction }); // skip the LLM
+    if (!reviewer?.available) {
+      return res.status(409).json({ error: "no reviewer LLM configured (Settings → LLM provider)" });
+    }
+    const transcript = masterTranscript(store.readMessages({ conversationId: conv.id, since: 0 }));
+    const prompt =
+      mode === "analyze"
+        ? masterAnalyzePrompt(conv, transcript, instruction)
+        : masterComposePrompt(conv, transcript, instruction);
+    try {
+      const text = await reviewerComplete(prompt);
+      res.json({ text });
+    } catch (err) {
+      res.status(502).json({ error: `master (${reviewer.backend}) error: ${err.message}` });
+    }
+  });
+
+  api.post("/conversations/:id/master/send", (req, res) => {
+    const conv = store.getConversation(req.params.id);
+    if (!conv) return res.status(404).json({ error: "conversation not found" });
+    if (conv.status !== "open") return res.status(400).json({ error: "conversation is closed" });
+    const { content } = req.body ?? {};
+    if (typeof content !== "string" || !content.trim()) {
+      return res.status(400).json({ error: "content required (string)" });
+    }
+    const rawTo = req.body?.to;
+    let to = (Array.isArray(rawTo) ? rawTo : rawTo ? [rawTo] : [])
+      .filter((n) => typeof n === "string" && n.length);
+    if (to.length) {
+      const unknown = to.filter((n) => !store.hasAgent(n));
+      if (unknown.length) return res.status(400).json({ error: `unknown agent(s): ${unknown.join(", ")}` });
+    } else {
+      to = store.channelMembers(conv.channel).filter((n) => n !== "master"); // default: everyone
+    }
+    let msg = store.postMessage({ conversationId: conv.id, from: "master", content, to });
+    if (msg.status === "pending") {
+      msg = store.approvePending(msg.id, {
+        decision: "approve",
+        reason: "master (supervisor)",
+        at: Date.now(),
+        by: "master",
+      }) || msg;
+    }
+    store.leaveChannel(conv.channel, "master"); // master is not a persistent member
+    broadcast({ type: "message.delivered", message: msg });
+    res.json(msg);
   });
 
   api.get("/conversations/:id/messages", (req, res) => {
@@ -442,7 +576,7 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
   api.get("/approval", (_req, res) => {
     res.json({
       mode: store.getMode(),
-      reviewer: reviewerInfo,
+      reviewer: reviewerInfo(),
       pending: store.listPending(),
     });
   });
@@ -451,7 +585,7 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     if (!["manual", "auto", "llm"].includes(next)) {
       return res.status(400).json({ error: "mode must be manual | auto | llm" });
     }
-    if (next === "llm" && !reviewerAvailable) {
+    if (next === "llm" && !reviewer?.available) {
       return res.status(409).json({
         error: "llm mode unavailable: no reviewer (set ANTHROPIC_API_KEY and restart the relay)",
       });
@@ -484,7 +618,7 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
       policy: config.readPolicy() ?? "",
       defaultPolicy: DEFAULT_POLICY,
       contracts: config.listContracts(),
-      reviewer: reviewerInfo,
+      reviewer: reviewerInfo(),
     });
   });
 
@@ -494,9 +628,9 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     if (mode != null && !["manual", "auto", "llm"].includes(mode)) {
       return res.status(400).json({ error: "mode must be manual | auto | llm" });
     }
-    if (mode === "llm" && !reviewerAvailable) {
+    if (mode === "llm" && !reviewer?.available) {
       return res.status(409).json({
-        error: "llm mode unavailable: no reviewer (set ANTHROPIC_API_KEY or install the claude CLI, then restart)",
+        error: "llm mode unavailable: no reviewer (pick a provider in Settings, or set ANTHROPIC_API_KEY / install the claude CLI)",
       });
     }
     const list = Array.isArray(contracts) ? contracts : [];
@@ -546,6 +680,100 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     }
     broadcast({ type: "contracts.updated" });
     res.json({ ok: true });
+  });
+
+  /* Reviewer provider config (LLM supervision backend). The human Settings UI
+   * picks provider/model/key here; it takes effect live (no restart). Secrets
+   * are write-only over the API — GET reports only which keys are SET. */
+  function keyStatus() {
+    const stored = config?.readReviewerConfig().keys ?? {};
+    const out = {};
+    for (const [p, meta] of Object.entries(REVIEWER_PROVIDERS)) {
+      if (!meta.needsKey) continue;
+      out[p] =
+        Boolean(stored[p]) ||
+        Boolean(meta.keyEnv && process.env[meta.keyEnv]) ||
+        (p === "gemini" && Boolean(process.env.GOOGLE_API_KEY));
+    }
+    return out;
+  }
+  function resolveProviderKey(provider) {
+    const stored = config?.readReviewerConfig().keys ?? {};
+    if (stored[provider]) return stored[provider];
+    const meta = REVIEWER_PROVIDERS[provider];
+    if (meta?.keyEnv && process.env[meta.keyEnv]) return process.env[meta.keyEnv];
+    if (provider === "gemini" && process.env.GOOGLE_API_KEY) return process.env.GOOGLE_API_KEY;
+    return null;
+  }
+  function reviewerConfigView() {
+    const cfg = config?.readReviewerConfig() ?? {};
+    return {
+      ...reviewerInfo(),
+      providers: REVIEWER_PROVIDERS,
+      selected: {
+        provider: cfg.provider ?? "auto",
+        model: cfg.model ?? "",
+        baseUrl: cfg.baseUrl ?? "",
+      },
+      keysSet: keyStatus(),
+      cliAvailable: reviewerCliAvailability(),
+    };
+  }
+
+  api.get("/reviewer", (_req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    res.json(reviewerConfigView());
+  });
+  /* List the models a provider exposes (for the Settings dropdown). The relay
+   * holds the key; it is resolved server-side and never accepted via query. */
+  api.get("/reviewer/models", async (req, res) => {
+    const provider = String(req.query.provider || "");
+    if (!REVIEWER_PROVIDERS[provider]) {
+      return res.status(400).json({ error: "unknown provider", models: [] });
+    }
+    try {
+      const models = await listModels(provider, {
+        key: resolveProviderKey(provider),
+        baseUrl: config?.readReviewerConfig().baseUrl,
+      });
+      res.json({ provider, models });
+    } catch (err) {
+      res.status(502).json({ error: err.message, models: [] });
+    }
+  });
+  api.put("/reviewer", (req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    const { provider, model, baseUrl, keys } = req.body ?? {};
+    const allowed = ["auto", ...Object.keys(REVIEWER_PROVIDERS)];
+    if (provider != null && !allowed.includes(provider)) {
+      return res.status(400).json({ error: `provider must be one of: ${allowed.join(", ")}` });
+    }
+    if (model != null && typeof model !== "string") {
+      return res.status(400).json({ error: "model must be a string" });
+    }
+    if (baseUrl != null && typeof baseUrl !== "string") {
+      return res.status(400).json({ error: "baseUrl must be a string" });
+    }
+    const patch = {};
+    if (provider != null) patch.provider = provider;
+    if (model != null) patch.model = model;
+    if (baseUrl != null) patch.baseUrl = baseUrl;
+    if (keys != null) {
+      if (typeof keys !== "object" || Array.isArray(keys)) {
+        return res.status(400).json({ error: "keys must be an object of provider→key" });
+      }
+      const clean = {};
+      for (const [p, v] of Object.entries(keys)) {
+        if (!REVIEWER_PROVIDERS[p]?.needsKey) continue; // ignore unknown / keyless providers
+        if (typeof v !== "string") continue;
+        clean[p] = v; // "" clears it (falls back to env)
+      }
+      if (Object.keys(clean).length) patch.keys = clean;
+    }
+    const merged = config.saveReviewerConfig(patch);
+    reviewer?.reconfigure?.(merged);
+    broadcast({ type: "reviewer.updated", reviewer: reviewerInfo() });
+    res.json(reviewerConfigView());
   });
 
   api.get("/policy", (_req, res) => {

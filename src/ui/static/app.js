@@ -10,6 +10,7 @@
 
   const convChannelName = document.getElementById("conv-channel-name");
   const convChannelMeta = document.getElementById("conv-channel-meta");
+  const convMembers = document.getElementById("conv-members");
   const convNewPane = document.getElementById("conv-new");
   const newConvTitle = document.getElementById("new-conv-title");
   const newConvPurpose = document.getElementById("new-conv-purpose");
@@ -30,6 +31,13 @@
   const messagesList = document.getElementById("messages");
   const pendingList = document.getElementById("pending");
   const pendingHeading = document.getElementById("pending-heading");
+  const masterBar = document.getElementById("master-bar");
+  const masterTarget = document.getElementById("master-target");
+  const masterInput = document.getElementById("master-input");
+  const masterMsg = document.getElementById("master-msg");
+  const masterPreview = document.getElementById("master-preview");
+  const masterDraft = document.getElementById("master-draft");
+  const masterAnalysis = document.getElementById("master-analysis");
   const emptyHint = document.getElementById("empty-hint");
   const overlay = document.getElementById("overlay");
   const settingsBtn = document.getElementById("settings-btn");
@@ -80,7 +88,8 @@
     return [...(convsByChannel.get(name) ?? [])]
       .map((id) => conversations.get(id))
       .filter(Boolean)
-      .sort((a, b) => b.createdAt - a.createdAt);
+      // Oldest first → the most recent conversation sits at the bottom of the list.
+      .sort((a, b) => a.createdAt - b.createdAt);
   }
   function unreadCountInConv(convId) {
     // We don't have read cursors for the supervisor (no token); show pending count instead.
@@ -143,13 +152,15 @@
     if (!selectedChannel) {
       convChannelName.textContent = "—";
       convChannelMeta.textContent = t("selectChannel");
+      convMembers.innerHTML = "";
       convNewPane.classList.add("hidden");
       conversationsList.innerHTML = "";
       return;
     }
     const info = channels.get(selectedChannel) || { members: [] };
     convChannelName.textContent = selectedChannel;
-    convChannelMeta.textContent = t("members", { list: (info.members || []).join(", ") || t("membersNone") });
+    convChannelMeta.textContent = "";
+    renderChannelMembers(info.members || []);
     convNewPane.classList.remove("hidden");
 
     const list = convsOfChannel(selectedChannel);
@@ -169,6 +180,85 @@
     if (closed.length) {
       appendConvSectionLabel(t("closed"));
       for (const c of closed) conversationsList.appendChild(convItem(c));
+    }
+  }
+  /* Channel membership chips + an "add agent" control (supervisor surface). The
+   * channel.updated broadcast re-renders this pane, so mutations need no manual refresh. */
+  function renderChannelMembers(members) {
+    convMembers.innerHTML = "";
+    const label = document.createElement("span");
+    label.className = "text-[11px] text-slate-400 font-mono";
+    label.textContent = t("membersInline");
+    convMembers.appendChild(label);
+
+    if (!members.length) {
+      const none = document.createElement("span");
+      none.className = "text-[11px] text-slate-400 italic";
+      none.textContent = t("membersNone");
+      convMembers.appendChild(none);
+    }
+    for (const name of members) {
+      const chip = document.createElement("span");
+      chip.className =
+        "inline-flex items-center gap-1 text-[11px] font-mono bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 rounded px-1.5 py-0.5";
+      const n = document.createElement("span");
+      n.textContent = name;
+      chip.appendChild(n);
+      const x = document.createElement("button");
+      x.type = "button";
+      x.className = "text-slate-400 hover:text-red-500 leading-none";
+      x.textContent = "×";
+      x.title = t("removeFromChannel");
+      x.onclick = () => removeMember(selectedChannel, name);
+      chip.appendChild(x);
+      convMembers.appendChild(chip);
+    }
+
+    const candidates = [...agents.keys()].filter((a) => !members.includes(a));
+    if (candidates.length) {
+      const sel = document.createElement("select");
+      sel.className =
+        "text-[11px] rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-1 py-0.5 font-mono";
+      const def = document.createElement("option");
+      def.value = "";
+      def.textContent = t("addAgentOption");
+      sel.appendChild(def);
+      for (const a of candidates) {
+        const o = document.createElement("option");
+        o.value = a;
+        o.textContent = a;
+        sel.appendChild(o);
+      }
+      const add = document.createElement("button");
+      add.type = "button";
+      add.className =
+        "px-1.5 rounded bg-slate-200 dark:bg-slate-700 dark:text-slate-200 hover:bg-blue-500 hover:text-white text-xs leading-none";
+      add.textContent = "+";
+      add.title = t("addToChannel");
+      add.onclick = () => { if (sel.value) addMember(selectedChannel, sel.value); };
+      convMembers.appendChild(sel);
+      convMembers.appendChild(add);
+    }
+  }
+  async function addMember(channel, agent) {
+    const res = await fetch(`/api/channels/${encodeURIComponent(channel)}/members`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ agent }),
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      alert(b.error || t("saveFailed"));
+    }
+  }
+  async function removeMember(channel, agent) {
+    const res = await fetch(
+      `/api/channels/${encodeURIComponent(channel)}/members/${encodeURIComponent(agent)}`,
+      { method: "DELETE" }
+    );
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      alert(b.error || t("saveFailed"));
     }
   }
   function appendConvSectionLabel(label) {
@@ -276,6 +366,7 @@
       pendingList.innerHTML = "";
       messagesList.innerHTML = "";
       emptyHint.hidden = false;
+      masterBar.classList.add("hidden");
       return;
     }
     const c = conversations.get(selectedConv);
@@ -304,12 +395,87 @@
     } else {
       for (const m of msgs) messagesList.appendChild(messageNode(m, false));
     }
+    renderMasterBar(c);
     scrollMessagesToBottom();
   }
   function scrollMessagesToBottom() {
     const s = document.getElementById("msg-scroll");
     s.scrollTop = s.scrollHeight;
   }
+
+  /* ---------- master: LLM-mediated supervisor presence ---------- */
+  let masterConvId = null;
+  function renderMasterBar(c) {
+    if (!c || c.status !== "open") { masterBar.classList.add("hidden"); return; }
+    masterBar.classList.remove("hidden");
+    // Rebuild the target dropdown (All + each agent member), preserving selection.
+    const prev = masterTarget.value;
+    const members = (channels.get(c.channel)?.members || []).filter((m) => m !== "master");
+    masterTarget.innerHTML =
+      `<option value="">${escapeHtml(t("masterAll"))}</option>` +
+      members.map((m) => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join("");
+    if ([...masterTarget.options].some((o) => o.value === prev)) masterTarget.value = prev;
+    // Reset the transient UI only when the conversation actually changed.
+    if (masterConvId !== c.id) {
+      masterConvId = c.id;
+      masterInput.value = "";
+      masterMsg.textContent = "";
+      masterPreview.classList.add("hidden");
+      masterAnalysis.classList.add("hidden");
+    }
+  }
+  async function masterAct(mode) {
+    if (!selectedConv) return;
+    const instruction = masterInput.value.trim();
+    if (!instruction) { masterMsg.textContent = t("masterEmpty"); return; }
+    masterMsg.textContent = t("masterThinking");
+    masterPreview.classList.add("hidden");
+    masterAnalysis.classList.add("hidden");
+    try {
+      const res = await fetch(`/api/conversations/${encodeURIComponent(selectedConv)}/master`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          mode,
+          instruction,
+          verbatim: document.getElementById("master-verbatim").checked,
+        }),
+      });
+      const b = await res.json().catch(() => ({}));
+      if (!res.ok) { masterMsg.textContent = b.error || t("saveFailed"); return; }
+      masterMsg.textContent = "";
+      if (mode === "compose") {
+        masterDraft.value = b.text || "";
+        masterPreview.classList.remove("hidden");
+      } else {
+        masterAnalysis.textContent = b.text || "";
+        masterAnalysis.classList.remove("hidden");
+      }
+    } catch (e) {
+      masterMsg.textContent = e.message;
+    }
+  }
+  document.getElementById("master-compose").onclick = () => masterAct("compose");
+  document.getElementById("master-analyze").onclick = () => masterAct("analyze");
+  document.getElementById("master-cancel").onclick = () => masterPreview.classList.add("hidden");
+  document.getElementById("master-send").onclick = async () => {
+    if (!selectedConv) return;
+    const content = masterDraft.value.trim();
+    if (!content) return;
+    masterMsg.textContent = t("masterSending");
+    const res = await fetch(`/api/conversations/${encodeURIComponent(selectedConv)}/master/send`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content, to: masterTarget.value || null }),
+    });
+    const b = await res.json().catch(() => ({}));
+    if (!res.ok) { masterMsg.textContent = b.error || t("saveFailed"); return; }
+    masterMsg.textContent = "";
+    masterInput.value = "";
+    masterDraft.value = "";
+    masterPreview.classList.add("hidden");
+    // the message.delivered broadcast renders the master message in the feed
+  };
 
   /* ---------- selection ---------- */
   async function selectChannel(name) {
@@ -509,6 +675,7 @@
       case "agent.registered":
         agents.set(e.agent.name, e.agent);
         renderAgents();
+        if (selectedChannel) renderConversationsPane(); // refresh the add-agent candidates
         break;
       case "channel.updated": {
         const c = e.channel;
@@ -597,6 +764,10 @@
         if (overlayMode === "settings") refreshSettings();
         break;
       case "policy.updated":
+        if (overlayMode === "settings") refreshSettings();
+        break;
+      case "reviewer.updated":
+        setReviewerAvailable(Boolean(e.reviewer?.available));
         if (overlayMode === "settings") refreshSettings();
         break;
     }
@@ -830,11 +1001,159 @@
         </span></li>`).join("")}</ul>`;
   }
 
-  async function refreshSettings() {
-    const data = await fetch("/api/setup").then((r) => r.json());
-    renderSettings(data);
+  /* Settings → LLM provider section. `cfg` is the /api/reviewer payload
+   *  (providers map, current selection, which keys are set, live availability). */
+  function reviewerProviderSectionHtml(cfg) {
+    if (!cfg) return "";
+    const providers = cfg.providers || {};
+    const sel = cfg.selected || { provider: "auto", model: "", baseUrl: "" };
+    const opts = [`<option value="auto" ${sel.provider === "auto" ? "selected" : ""}>${escapeHtml(t("providerAuto"))}</option>`]
+      .concat(Object.entries(providers).map(([id, meta]) =>
+        `<option value="${escapeHtml(id)}" ${sel.provider === id ? "selected" : ""}>${escapeHtml(meta.label || id)}</option>`
+      )).join("");
+    const status = cfg.available
+      ? t("reviewerActive", { backend: cfg.backend || cfg.provider || "", model: cfg.model ? ` · ${cfg.model}` : "" })
+      : t("reviewerInactive");
+    return `<div class="settings-section">
+        <h3>${escapeHtml(t("llmProvider"))}</h3>
+        <p class="sub">${escapeHtml(t("llmProviderDesc"))}</p>
+        <div class="field">
+          <label>${escapeHtml(t("provider"))}</label>
+          <select id="set-rv-provider">${opts}</select>
+        </div>
+        <div class="field">
+          <label>${escapeHtml(t("model"))}</label>
+          <div class="flex gap-1">
+            <select id="set-rv-model-list" class="flex-1 min-w-0 text-[11px] rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-1 py-0.5 font-mono">
+              <option value="">${escapeHtml(t("modelsPick"))}</option>
+            </select>
+            <button id="set-rv-model-fetch" type="button" class="px-1.5 rounded bg-slate-200 dark:bg-slate-700 dark:text-slate-200 hover:bg-blue-500 hover:text-white text-xs leading-none" title="${escapeHtml(t("refreshModels"))}">↻</button>
+          </div>
+          <input type="text" id="set-rv-model" class="mt-1" value="${escapeHtml(sel.model || "")}" />
+          <div class="field-ok" id="set-rv-model-msg"></div>
+        </div>
+        <div class="field" id="set-rv-baseurl-wrap">
+          <label>${escapeHtml(t("baseUrl"))}</label>
+          <input type="text" id="set-rv-baseurl" value="${escapeHtml(sel.baseUrl || "")}" placeholder="http://127.0.0.1:11434" />
+        </div>
+        <div class="field" id="set-rv-key-wrap">
+          <label id="set-rv-key-label">${escapeHtml(t("apiKey"))}</label>
+          <input type="password" id="set-rv-key" autocomplete="off" placeholder="${escapeHtml(t("apiKeyKeep"))}" />
+          <div class="field-ok" id="set-rv-key-state"></div>
+        </div>
+        <div class="field-ok" id="set-rv-status">${escapeHtml(status)}</div>
+        <button class="btn btn-primary" id="set-rv-save" type="button">${escapeHtml(t("saveProvider"))}</button>
+        <div class="field-ok" id="set-rv-msg"></div>
+      </div>`;
   }
-  function renderSettings(data) {
+
+  function wireReviewerProviderSection(cfg) {
+    const providerSel = overlay.querySelector("#set-rv-provider");
+    if (!providerSel || !cfg) return;
+    const providers = cfg.providers || {};
+    const keysSet = cfg.keysSet || {};
+    const cliAvailable = cfg.cliAvailable || {};
+    const modelInput = overlay.querySelector("#set-rv-model");
+    const modelList = overlay.querySelector("#set-rv-model-list");
+    const modelMsg = overlay.querySelector("#set-rv-model-msg");
+    const baseUrlWrap = overlay.querySelector("#set-rv-baseurl-wrap");
+    const keyWrap = overlay.querySelector("#set-rv-key-wrap");
+    const keyInput = overlay.querySelector("#set-rv-key");
+    const keyState = overlay.querySelector("#set-rv-key-state");
+
+    async function fetchModels(p) {
+      modelMsg.textContent = t("loadingModels");
+      try {
+        const r = await fetch(`/api/reviewer/models?provider=${encodeURIComponent(p)}`);
+        const b = await r.json().catch(() => ({}));
+        modelList.innerHTML = `<option value="">${escapeHtml(t("modelsPick"))}</option>`;
+        if (!r.ok || !Array.isArray(b.models) || !b.models.length) {
+          modelMsg.textContent = b.error ? t("modelsError", { err: b.error }) : t("modelsNone");
+          return;
+        }
+        for (const m of b.models) {
+          const o = document.createElement("option");
+          o.value = m;
+          o.textContent = m;
+          if (m === modelInput.value) o.selected = true;
+          modelList.appendChild(o);
+        }
+        modelMsg.textContent = "";
+      } catch (e) {
+        modelMsg.textContent = t("modelsError", { err: e.message });
+      }
+    }
+
+    function syncFields() {
+      const p = providerSel.value;
+      const meta = providers[p];
+      const def = meta?.defaultModel;
+      modelInput.placeholder = def ? t("modelDefault", { model: def }) : "";
+      baseUrlWrap.style.display = p === "ollama" ? "" : "none";
+      const needsKey = Boolean(meta?.needsKey);
+      keyWrap.style.display = needsKey ? "" : "none";
+      keyState.textContent = needsKey ? (keysSet[p] ? t("apiKeySet") : t("apiKeyNotSet")) : "";
+      // Reset + auto-load the model list when we plausibly can.
+      modelList.innerHTML = `<option value="">${escapeHtml(t("modelsPick"))}</option>`;
+      if (p === "auto") {
+        modelMsg.textContent = "";
+      } else if (p === "claude-cli") {
+        // CLI-backed, model fixed by the CLI — just report install status.
+        modelMsg.textContent = cliAvailable[p] ? t("cliInstalled") : t("cliMissing");
+      } else if (p === "opencode") {
+        if (cliAvailable[p]) fetchModels(p); // discover opencode's configured models
+        else modelMsg.textContent = t("cliMissing");
+      } else if (needsKey && !keysSet[p]) {
+        modelMsg.textContent = t("modelsNeedKey");
+      } else {
+        fetchModels(p);
+      }
+    }
+    syncFields();
+    providerSel.onchange = syncFields;
+    overlay.querySelector("#set-rv-model-fetch").onclick = () => {
+      const p = providerSel.value;
+      if (p !== "auto" && p !== "claude-cli") fetchModels(p);
+    };
+    modelList.onchange = () => { if (modelList.value) modelInput.value = modelList.value; };
+
+    overlay.querySelector("#set-rv-save").onclick = async () => {
+      const provider = providerSel.value;
+      const meta = providers[provider];
+      const body = {
+        provider,
+        model: modelInput.value.trim(),
+        baseUrl: overlay.querySelector("#set-rv-baseurl").value.trim(),
+      };
+      const keyVal = keyInput.value;
+      if (meta?.needsKey && keyVal) body.keys = { [provider]: keyVal };
+      const msg = overlay.querySelector("#set-rv-msg");
+      msg.textContent = t("saving");
+      const res = await fetch("/api/reviewer", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        msg.textContent = e.error || t("saveFailed");
+        return;
+      }
+      const updated = await res.json();
+      setReviewerAvailable(Boolean(updated.available));
+      msg.textContent = t("saved");
+      refreshSettings();
+    };
+  }
+
+  async function refreshSettings() {
+    const [data, reviewerCfg] = await Promise.all([
+      fetch("/api/setup").then((r) => r.json()),
+      fetch("/api/reviewer").then((r) => r.json()).catch(() => null),
+    ]);
+    renderSettings(data, reviewerCfg);
+  }
+  function renderSettings(data, reviewerCfg) {
     const contracts = data.contracts || [];
     const policy = data.policy || "";
     const mode = data.mode || "manual";
@@ -851,6 +1170,7 @@
         <h3>${escapeHtml(t("supervisionMode"))}</h3>
         <div class="field"><select id="set-mode">${modeSel}</select></div>
       </div>
+      ${reviewerProviderSectionHtml(reviewerCfg)}
       <div class="settings-section">
         <h3>${escapeHtml(t("reviewerPolicy"))}</h3>
         <div class="field">
@@ -873,6 +1193,7 @@
     </div>`, "settings");
     overlay.querySelector("#set-close").onclick = closeOverlay;
     overlay.querySelector("#set-mode").onchange = (e) => changeMode(e.target.value);
+    wireReviewerProviderSection(reviewerCfg);
     overlay.querySelector("#set-policy-save").onclick = async () => {
       const text = overlay.querySelector("#set-policy").value;
       const res = await fetch("/api/policy", {

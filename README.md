@@ -57,7 +57,28 @@ Set the mode in the web UI, the relay REPL, or the wizard — your choice is sav
 | **auto** | deliver everything, no supervision | no LLM, zero tokens |
 | **llm** | an AI reviewer **approves** routine messages, **rejects** bad ones, **escalates** the risky to you | uses the reviewer |
 
-`llm` **fails safe** (any reviewer error escalates, never auto-approves) and treats messages as untrusted data. It's opt-in and picks a backend automatically: the **Anthropic API** if `ANTHROPIC_API_KEY` is set, else the **`claude` CLI** if installed. Edit the rubric in the web UI's **⚙ Settings** or with `switchboard start --review-policy ./policy.md`.
+`llm` **fails safe** (any reviewer error escalates, never auto-approves) and treats messages as untrusted data. Edit the rubric in the web UI's **⚙ Settings** or with `switchboard start --review-policy ./policy.md`.
+
+### Choosing the reviewer LLM (multi-provider)
+
+The `llm` reviewer is **provider-agnostic** — pick which model judges messages. Supported providers:
+
+| Provider | Notes | Needs a key |
+|---|---|---|
+| `anthropic` | Anthropic API (Haiku by default, cached rubric) | `ANTHROPIC_API_KEY` |
+| `claude-cli` | headless `claude -p` — reuses your Claude Code auth | no key |
+| `opencode` | headless `opencode run` — reuses the providers/models you configured in [OpenCode](https://opencode.ai); the picker lists them via `opencode models` | no key |
+| `openai` | OpenAI API (`gpt-4o-mini` by default) | `OPENAI_API_KEY` |
+| `gemini` | Google Gemini API (`gemini-1.5-flash` by default) | `GEMINI_API_KEY` / `GOOGLE_API_KEY` |
+| `ollama` | local models via Ollama (`llama3.1` by default) — private, no cost | no key |
+| `auto` (default) | Anthropic API if a key is present, else the `claude` CLI | — |
+
+Configure it two ways:
+
+- **Web UI (recommended):** **⚙ Settings → LLM provider** — choose provider, model, base URL (Ollama), and paste an API key. The **model field has a dropdown** that lists the provider's models (Ollama via `/api/tags`, OpenAI/Gemini/Anthropic via their list APIs, OpenCode via `opencode models`); CLI providers (`claude-cli`, `opencode`) report whether they're installed. **Applied live, no restart**, and the change enables `llm` mode automatically once a reviewer is available.
+- **Environment variables:** set any of the keys above before `switchboard start` and `auto` (or an explicitly selected provider) picks them up.
+
+The selection persists in `~/.switchboard/config.json` under `reviewer` (`{ provider, model, baseUrl, keys }`); that file is written **owner-only (`0600`)** because it can hold API keys. API keys are **write-only over the HTTP API** — `GET /api/reviewer` only reports which keys are set, never their values. Whatever the backend, the reviewer **fails safe**: any error escalates, never auto-approves.
 
 ### Web supervision UI
 
@@ -66,9 +87,18 @@ Open **http://localhost:8765**. The layout is three columns — **channels** (le
 - **Language** — `Español` / `English`. UI strings only; persists in `localStorage`.
 - **Theme** — `light` / `dark` / `auto` (follows your OS). Persists in `localStorage`. An anti-FOUC script applies the saved theme before first paint, so reloads don't flash white.
 - **Mode** — supervision mode (`manual` / `auto` / `llm`). Changing it is live; persisted via `/api/setup`.
-- **⚙ Settings** — overlay to edit mode, reviewer policy, and named contracts after the wizard.
+- **⚙ Settings** — overlay to edit mode, the **LLM provider** (see above), reviewer policy, and named contracts after the wizard.
 
 On first run (when `~/.switchboard/config.json` is missing) a step-by-step **setup wizard** runs instead of the main UI: mode → policy → contracts.
+
+### master — the supervisor's voice in a conversation
+
+Each conversation has a **master** bar at the bottom of the message column: an **LLM-mediated supervisor presence** powered by the configured reviewer provider. You type an instruction in your own words and master either speaks to the agents for you or analyzes the thread for you.
+
+- **Compose & send** — master drafts a message to the agent(s) from your instruction + the conversation context, shows it as a **preview you can edit**, and on confirm posts it as `master`. It's **delivered immediately** (the human is the authority — no self-approval) and **addressed** so the listener wakes the recipients. Target **All** members or **one agent**. Tick **verbatim** to send your text as-is (skips the LLM).
+- **Analyze (for you only)** — ask master to read the conversation and answer a question about it ("is this communication effective? what criteria should apply?"). The result is shown to you and **never sent to the agents**.
+
+master needs an LLM, so it uses whatever provider you set under **⚙ Settings → LLM provider**; it's disabled if none is configured. Behind the scenes: `POST /api/conversations/:id/master` (compose/analyze, posts nothing) and `POST /api/conversations/:id/master/send` (posts the confirmed text). `master` is not a persistent channel member — it speaks, then steps out.
 
 ### The agent's tools
 
@@ -103,9 +133,11 @@ A channel is a group with explicit members; everyone in it sees every message. T
 - **Web UI:** click the **✕** on the channel's row.
 - **REPL:** `delchan <name>`.
 
-**Inspect / membership** (REPL `switchboard>` prompt):
-- `agents`, `channels`, `members <chan>` — list connected agents, channels, members
-- `addto <agent> <chan>…` / `removefrom <agent> <chan>…` — add/remove a **connected** agent
+**Membership** — add/remove a **connected** agent to/from a channel:
+- **Web UI:** in the conversations column header, the **members** row shows each member with an **×** to remove, plus an **"add agent…"** dropdown + **+** to add one.
+- **REPL:** `addto <agent> <chan>…` / `removefrom <agent> <chan>…`.
+
+**Inspect** (REPL `switchboard>` prompt): `agents`, `channels`, `members <chan>` — list connected agents, channels, members.
 
 ### Verifiable contracts
 
