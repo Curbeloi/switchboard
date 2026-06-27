@@ -7,6 +7,7 @@ import { createStore } from "./store.js";
 import { mountRoutes } from "./routes/index.js";
 import { createReviewer } from "./reviewer.js";
 import { createConfigStore } from "./config.js";
+import { createAgentManager } from "./agents/manager.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -58,7 +59,10 @@ export async function startRelay({
     return () => localListeners.delete(fn);
   }
 
-  mountRoutes(app, { store, broadcast, reviewer, config });
+  // Launches/supervises engine CLIs (Claude Code) as PTY agents per project.
+  const agents = createAgentManager({ relay: `http://${host}:${port}`, broadcast });
+
+  mountRoutes(app, { store, broadcast, reviewer, config, agents });
 
   /* In "llm" mode, the reviewer drains the pending queue automatically:
    *  approve/reject deliver or drop the message; escalate leaves it pending
@@ -92,9 +96,23 @@ export async function startRelay({
   /* Static supervision UI */
   app.use("/", express.static(STATIC_DIR));
 
-  /* HTTP + WS on same port */
+  /* HTTP + WS on same port. Two WS endpoints share the server, so we route the
+   * upgrade ourselves (ws requires noServer when multiple servers share one HTTP
+   * server): /subscribe = supervision events, /console = a project's terminal. */
   const server = createServer(app);
-  const wss = new WebSocketServer({ server, path: "/subscribe" });
+  const wss = new WebSocketServer({ noServer: true });
+  const consoleWss = new WebSocketServer({ noServer: true });
+  server.on("upgrade", (req, socket, head) => {
+    let pathname;
+    try { pathname = new URL(req.url, "http://localhost").pathname; } catch { socket.destroy(); return; }
+    if (pathname === "/subscribe") {
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+    } else if (pathname === "/console") {
+      consoleWss.handleUpgrade(req, socket, head, (ws) => consoleWss.emit("connection", ws, req));
+    } else {
+      socket.destroy();
+    }
+  });
   wss.on("connection", (ws) => {
     subscribers.add(ws);
     ws.send(
@@ -111,6 +129,17 @@ export async function startRelay({
     );
     ws.on("close", () => subscribers.delete(ws));
   });
+  // Each /console client attaches to one project's PTY (?project=<id>).
+  consoleWss.on("connection", (ws, req) => {
+    let projectId = null;
+    try { projectId = new URL(req.url, "http://localhost").searchParams.get("project"); } catch { /* noop */ }
+    if (!projectId) { try { ws.close(); } catch { /* noop */ } return; }
+    agents.attach(ws, projectId);
+  });
+  // Don't leave orphaned agent CLIs when the relay stops/restarts.
+  for (const sig of ["SIGINT", "SIGTERM"]) {
+    process.once(sig, () => { try { agents.shutdown(); } finally { process.exit(0); } });
+  }
 
   return new Promise((resolve, reject) => {
     server.on("error", reject);

@@ -16,6 +16,7 @@
       })();
     </script>
     <link rel="stylesheet" href="tailwind.css" />
+    <link rel="stylesheet" href="vendor/xterm.css" />
     <link rel="stylesheet" href="style.css" />
   </head>
   <body class="h-screen bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-200 font-sans flex flex-col overflow-hidden">
@@ -33,6 +34,15 @@
 
     <div id="overlay" class="overlay" hidden></div>
 
+    <!-- Live console for a project's agent (xterm.js over the /console WebSocket) -->
+    <div id="console-overlay" class="console-overlay" hidden>
+      <div class="console-bar">
+        <span class="console-title"><span id="console-agent" class="font-mono"></span> <span id="console-status" class="console-status"></span></span>
+        <button id="console-close" class="btn" type="button" data-i18n="close">Close</button>
+      </div>
+      <div id="term" class="console-term"></div>
+    </div>
+
     <main class="flex-1 flex min-h-0">
       <!-- Channels + agents (left column) -->
       <aside id="col-channels" class="order-1 w-60 flex-shrink-0 border-r border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-y-auto flex flex-col">
@@ -47,6 +57,13 @@
         <section class="p-3 border-t border-slate-200 dark:border-slate-700">
           <h2 class="text-[10px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400 mb-2" data-i18n="agents">Agents</h2>
           <ul id="agents" class="space-y-0.5"><li class="text-xs text-slate-400 italic px-2" data-i18n="noAgents">no agents yet</li></ul>
+        </section>
+        <section class="p-3 border-t border-slate-200 dark:border-slate-700">
+          <div class="flex items-center justify-between mb-2">
+            <h2 class="text-[10px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400" data-i18n="projects">Projects</h2>
+            <button id="project-add-btn" class="text-xs px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-700 dark:text-slate-200 hover:bg-blue-500 hover:text-white" data-i18n-title="newProject" title="new project">+</button>
+          </div>
+          <ul id="projects" class="space-y-1"><li class="text-xs text-slate-400 italic px-2" data-i18n="noProjects">no projects yet</li></ul>
         </section>
       </aside>
 
@@ -154,6 +171,8 @@
       </section>
     </main>
 
+    <script src="vendor/xterm.js"></script>
+    <script src="vendor/addon-fit.js"></script>
     <script src="i18n.js"></script>
     <script src="app.js"></script>
   </body>

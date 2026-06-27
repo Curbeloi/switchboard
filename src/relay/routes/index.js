@@ -2,6 +2,8 @@ import { Router } from "express";
 import Ajv from "ajv";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { existsSync, statSync, mkdirSync, writeFileSync } from "node:fs";
+import { basename, join, isAbsolute } from "node:path";
 import { DEFAULT_POLICY, REVIEWER_PROVIDERS, listModels, reviewerCliAvailability, complete } from "../reviewer.js";
 
 const ajv = new Ajv({ allErrors: true, strict: false });
@@ -121,7 +123,7 @@ function masterAnalyzePrompt(conv, transcript, instruction, locale = null, membe
   };
 }
 
-export function mountRoutes(app, { store, broadcast, reviewer = null, config = null }) {
+export function mountRoutes(app, { store, broadcast, reviewer = null, config = null, agents = null }) {
   const api = Router();
   /* Dynamic: the reviewer can be reconfigured at runtime (provider switched from
    *  Settings), so availability/backend must be read per request, not captured. */
@@ -902,6 +904,76 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     reviewer?.setLocale?.(locale ?? null);
     broadcast({ type: "locale.updated", locale: locale ?? null });
     res.json({ locale: locale ?? null });
+  });
+
+  /* ---- Projects: a directory + engine + agent identity switchboard can launch.
+   * The CLI runs in a PTY (see agents manager); its console streams over the
+   * /console WebSocket. Definitions persist in config; process state is live. */
+  api.get("/projects", (_req, res) => {
+    if (!config) return res.json([]);
+    const list = config.readProjects().map((p) => ({ ...p, status: agents?.statusOf(p.id) ?? "stopped" }));
+    res.json(list);
+  });
+
+  api.post("/projects", async (req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    const { mode = "existing", name, dir, parentDir, agentName, engine = "claude" } = req.body ?? {};
+    try {
+      let projectDir, projectName;
+      if (mode === "new") {
+        if (!config.validName(name)) return res.status(400).json({ error: "name required (letters, digits, . _ -)" });
+        if (typeof parentDir !== "string" || !isAbsolute(parentDir.trim() || "")) {
+          return res.status(400).json({ error: "parentDir required (absolute path)" });
+        }
+        projectDir = join(parentDir.trim(), name);
+        if (existsSync(projectDir)) return res.status(400).json({ error: `already exists: ${projectDir}` });
+        mkdirSync(projectDir, { recursive: true });
+        await execFileAsync("git", ["-C", projectDir, "init"], { timeout: 15000 });
+        writeFileSync(join(projectDir, "README.md"), `# ${name}\n`);
+        projectName = name;
+      } else {
+        if (typeof dir !== "string" || !isAbsolute(dir.trim() || "")) {
+          return res.status(400).json({ error: "dir required (absolute path)" });
+        }
+        projectDir = dir.trim();
+        let st;
+        try { st = statSync(projectDir); } catch { return res.status(400).json({ error: `directory not found: ${projectDir}` }); }
+        if (!st.isDirectory()) return res.status(400).json({ error: `not a directory: ${projectDir}` });
+        projectName = config.validName(name) ? name : basename(projectDir);
+      }
+      const finalAgent = config.validName(agentName) ? agentName : projectName;
+      const project = config.addProject({ name: projectName, dir: projectDir, engine, agentName: finalAgent });
+      broadcast({ type: "project.created", project });
+      res.json(project);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  api.delete("/projects/:id", (req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    agents?.stop(req.params.id);
+    if (!config.removeProject(req.params.id)) return res.status(404).json({ error: "project not found" });
+    broadcast({ type: "project.deleted", id: req.params.id });
+    res.json({ ok: true });
+  });
+
+  api.post("/projects/:id/agent/start", async (req, res) => {
+    if (!config || !agents) return res.status(409).json({ error: "projects unavailable" });
+    const project = config.getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: "project not found" });
+    try {
+      await agents.start(project);
+      res.json({ projectId: project.id, status: agents.statusOf(project.id) });
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  api.post("/projects/:id/agent/stop", (req, res) => {
+    if (!agents) return res.status(409).json({ error: "projects unavailable" });
+    const ok = agents.stop(req.params.id);
+    res.json({ ok, status: agents.statusOf(req.params.id) });
   });
 
   app.use("/api", api);

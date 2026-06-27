@@ -50,6 +50,12 @@
   const emptyHint = document.getElementById("empty-hint");
   const overlay = document.getElementById("overlay");
   const settingsBtn = document.getElementById("settings-btn");
+  const projectsList = document.getElementById("projects");
+  const projectAddBtn = document.getElementById("project-add-btn");
+  const consoleOverlay = document.getElementById("console-overlay");
+  const consoleAgentEl = document.getElementById("console-agent");
+  const consoleStatusEl = document.getElementById("console-status");
+  const termEl = document.getElementById("term");
 
   /* ---------- i18n shortcut ---------- */
   const t = (key, vars) => window.SBI18n.t(key, vars);
@@ -719,6 +725,14 @@
         agents.set(e.agent.name, e.agent);
         renderAgents();
         if (selectedChannel) renderConversationsPane(); // refresh the add-agent candidates
+        break;
+      case "project.created":
+      case "project.deleted":
+        refreshProjects();
+        break;
+      case "agent.proc":
+        refreshProjects();
+        if (consoleProjectId === e.projectId) setConsoleStatus(e.status);
         break;
       case "channel.updated": {
         const c = e.channel;
@@ -1474,6 +1488,7 @@
     renderChannels();
     renderConversationsPane();
     renderMessages();
+    renderProjects();
     renderContractsSelect();
     // Re-render the open overlay so its dynamic text follows the language.
     if (overlayMode === "settings") refreshSettings();
@@ -1495,6 +1510,137 @@
     }).catch(() => {});
   }
 
+  /* ---------- projects + live agent console ---------- */
+  let projects = [];
+  let term = null, fitAddon = null, consoleWs = null, consoleProjectId = null, consoleResizeFn = null;
+
+  async function refreshProjects() {
+    try { projects = await fetch("/api/projects").then((r) => r.json()); }
+    catch { projects = []; }
+    renderProjects();
+  }
+  function renderProjects() {
+    projectsList.innerHTML = "";
+    if (!projects.length) {
+      projectsList.innerHTML = `<li class="text-xs text-slate-400 italic px-2">${escapeHtml(t("noProjects"))}</li>`;
+      return;
+    }
+    for (const p of projects) {
+      const running = p.status === "running";
+      const dot = running ? "bg-green-500" : (p.status === "exited" ? "bg-amber-500" : "bg-slate-300 dark:bg-slate-600");
+      const li = document.createElement("li");
+      li.className = "rounded px-2 py-1 hover:bg-slate-50 dark:hover:bg-slate-700/40";
+      li.innerHTML = `
+        <div class="flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full ${dot} shrink-0"></span>
+          <span class="font-mono text-xs truncate flex-1" title="${escapeHtml(p.dir)}">${escapeHtml(p.name)}</span>
+        </div>
+        <div class="flex gap-1 mt-1">
+          <button data-act="toggle" class="text-[11px] px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-600 hover:border-blue-500 hover:text-blue-600">${escapeHtml(running ? t("stop") : t("start"))}</button>
+          <button data-act="console" class="text-[11px] px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-600 hover:border-blue-500 hover:text-blue-600 disabled:opacity-40" ${running ? "" : "disabled"}>${escapeHtml(t("console"))}</button>
+          <button data-act="del" class="text-[11px] px-1.5 py-0.5 rounded text-slate-400 hover:text-red-500 ml-auto" title="${escapeHtml(t("remove"))}">✕</button>
+        </div>`;
+      li.querySelector('[data-act="toggle"]').onclick = () => toggleAgent(p);
+      const cbtn = li.querySelector('[data-act="console"]');
+      if (running) cbtn.onclick = () => openConsole(p);
+      li.querySelector('[data-act="del"]').onclick = () => deleteProject(p);
+      projectsList.appendChild(li);
+    }
+  }
+  async function toggleAgent(p) {
+    const action = p.status === "running" ? "stop" : "start";
+    const res = await fetch(`/api/projects/${encodeURIComponent(p.id)}/agent/${action}`, { method: "POST" });
+    if (!res.ok) { const b = await res.json().catch(() => ({})); alert(b.error || t("saveFailed")); }
+    await refreshProjects();
+    if (action === "start" && res.ok) { const fresh = projects.find((x) => x.id === p.id); if (fresh) openConsole(fresh); }
+  }
+  async function deleteProject(p) {
+    if (!confirm(t("deleteProjectConfirm", { name: p.name }))) return;
+    if (consoleProjectId === p.id) closeConsole();
+    await fetch(`/api/projects/${encodeURIComponent(p.id)}`, { method: "DELETE" });
+    refreshProjects();
+  }
+  function openProjectForm() {
+    showOverlay(`<div class="panel">
+      <div class="row-between"><h2>${escapeHtml(t("newProject"))}</h2><button class="btn" id="pf-close" type="button">${escapeHtml(t("close"))}</button></div>
+      <div class="field"><label>${escapeHtml(t("projectMode"))}</label>
+        <select id="pf-mode">
+          <option value="existing">${escapeHtml(t("projectExisting"))}</option>
+          <option value="new">${escapeHtml(t("projectNew"))}</option>
+        </select></div>
+      <div id="pf-existing">
+        <div class="field"><label>${escapeHtml(t("projectDir"))}</label><input type="text" id="pf-dir" placeholder="/ruta/al/repo" /></div>
+      </div>
+      <div id="pf-new" style="display:none">
+        <div class="field"><label>${escapeHtml(t("projectParent"))}</label><input type="text" id="pf-parent" placeholder="/ruta/carpeta-padre" /></div>
+        <div class="field"><label>${escapeHtml(t("projectName"))}</label><input type="text" id="pf-name" placeholder="mi-proyecto" /></div>
+      </div>
+      <div class="field"><label>${escapeHtml(t("projectAgent"))}</label><input type="text" id="pf-agent" placeholder="${escapeHtml(t("projectAgentHint"))}" /></div>
+      <div class="field-error" id="pf-err"></div>
+      <button class="btn btn-primary" id="pf-create" type="button">${escapeHtml(t("create"))}</button>
+    </div>`, "project");
+    const mode = overlay.querySelector("#pf-mode");
+    const toggle = () => {
+      overlay.querySelector("#pf-existing").style.display = mode.value === "existing" ? "" : "none";
+      overlay.querySelector("#pf-new").style.display = mode.value === "new" ? "" : "none";
+    };
+    mode.onchange = toggle; toggle();
+    overlay.querySelector("#pf-close").onclick = closeOverlay;
+    overlay.querySelector("#pf-create").onclick = async () => {
+      const agentName = overlay.querySelector("#pf-agent").value.trim();
+      const body = mode.value === "new"
+        ? { mode: "new", parentDir: overlay.querySelector("#pf-parent").value.trim(), name: overlay.querySelector("#pf-name").value.trim(), agentName }
+        : { mode: "existing", dir: overlay.querySelector("#pf-dir").value.trim(), agentName };
+      const res = await fetch("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      if (!res.ok) { const b = await res.json().catch(() => ({})); overlay.querySelector("#pf-err").textContent = b.error || t("saveFailed"); return; }
+      closeOverlay();
+      refreshProjects();
+    };
+  }
+  function setConsoleStatus(s) {
+    consoleStatusEl.textContent = s;
+    consoleStatusEl.className = "console-status " + s;
+  }
+  function openConsole(p) {
+    closeConsole();
+    consoleProjectId = p.id;
+    consoleAgentEl.textContent = `${p.agentName} · ${p.dir}`;
+    setConsoleStatus(p.status || "running");
+    consoleOverlay.hidden = false;
+    term = new Terminal({
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, monospace',
+      fontSize: 13, cursorBlink: true, scrollback: 5000,
+      theme: { background: "#0b0f1a" },
+    });
+    fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(termEl);
+    const sendResize = () => {
+      try { fitAddon.fit(); } catch { /* not laid out yet */ }
+      if (consoleWs && consoleWs.readyState === WebSocket.OPEN) {
+        consoleWs.send("\x00" + JSON.stringify({ resize: { cols: term.cols, rows: term.rows } }));
+      }
+    };
+    consoleResizeFn = sendResize;
+    requestAnimationFrame(sendResize);
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    consoleWs = new WebSocket(`${proto}://${location.host}/console?project=${encodeURIComponent(p.id)}`);
+    consoleWs.onopen = () => setTimeout(sendResize, 60);
+    consoleWs.onmessage = (ev) => { if (typeof ev.data === "string") term.write(ev.data); };
+    consoleWs.onclose = () => { if (consoleProjectId === p.id) setConsoleStatus("stopped"); };
+    term.onData((d) => { if (consoleWs && consoleWs.readyState === WebSocket.OPEN) consoleWs.send(d); });
+    window.addEventListener("resize", sendResize);
+  }
+  function closeConsole() {
+    if (consoleResizeFn) { window.removeEventListener("resize", consoleResizeFn); consoleResizeFn = null; }
+    if (consoleWs) { try { consoleWs.close(); } catch { /* noop */ } consoleWs = null; }
+    if (term) { try { term.dispose(); } catch { /* noop */ } term = null; fitAddon = null; }
+    consoleOverlay.hidden = true;
+    consoleProjectId = null;
+  }
+  projectAddBtn.onclick = openProjectForm;
+  document.getElementById("console-close").onclick = closeConsole;
+
   /* ---------- init ---------- */
   async function init() {
     applyTheme(getThemePref());
@@ -1511,6 +1657,7 @@
     } catch {
       /* relay not reachable yet; WS reconnect will catch up */
     }
+    refreshProjects();
     connect();
   }
   init();

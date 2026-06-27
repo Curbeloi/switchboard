@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -67,6 +68,7 @@ export function createConfigStore(dir = DEFAULT_CONFIG_DIR) {
   const contractsDir = join(dir, "contracts");
   const configPath = join(dir, "config.json");
   const policyPath = join(dir, "policy.md");
+  const projectsPath = join(dir, "projects.json");
 
   function ensureDir() {
     mkdirSync(contractsDir, { recursive: true });
@@ -184,6 +186,55 @@ export function createConfigStore(dir = DEFAULT_CONFIG_DIR) {
     return reviewer;
   }
 
+  /* Projects: a directory + engine + agent identity that switchboard can launch.
+   *  Persisted as projects.json (definition/config, not messaging). The running
+   *  process state lives in the in-memory agent manager, not here. */
+  const VALID_ENGINES = new Set(["claude"]); // opencode etc. added later
+  function readProjects() {
+    if (!existsSync(projectsPath)) return [];
+    try {
+      const arr = JSON.parse(readFileSync(projectsPath, "utf8"));
+      return Array.isArray(arr) ? arr : [];
+    } catch {
+      return [];
+    }
+  }
+  function getProject(id) {
+    return readProjects().find((p) => p.id === id) ?? null;
+  }
+  function writeProjects(list) {
+    ensureDir();
+    writeFileSync(projectsPath, JSON.stringify(list, null, 2));
+    return list;
+  }
+  function addProject({ name, dir: projectDir, engine = "claude", agentName }) {
+    if (!validName(name)) throw new Error(`invalid project name: ${name}`);
+    if (typeof projectDir !== "string" || !projectDir.trim()) throw new Error("dir is required");
+    if (!VALID_ENGINES.has(engine)) throw new Error(`unsupported engine: ${engine}`);
+    if (!validName(agentName)) throw new Error(`invalid agent name: ${agentName}`);
+    const list = readProjects();
+    if (list.some((p) => p.dir === projectDir.trim())) {
+      throw new Error(`a project already points to ${projectDir.trim()}`);
+    }
+    const project = {
+      id: randomUUID(),
+      name,
+      dir: projectDir.trim(),
+      engine,
+      agentName,
+      createdAt: Date.now(),
+    };
+    writeProjects([...list, project]);
+    return project;
+  }
+  function removeProject(id) {
+    const list = readProjects();
+    const next = list.filter((p) => p.id !== id);
+    if (next.length === list.length) return false;
+    writeProjects(next);
+    return true;
+  }
+
   return {
     dir,
     contractsDir,
@@ -201,5 +252,9 @@ export function createConfigStore(dir = DEFAULT_CONFIG_DIR) {
     saveConfig,
     readReviewerConfig,
     saveReviewerConfig,
+    readProjects,
+    getProject,
+    addProject,
+    removeProject,
   };
 }
