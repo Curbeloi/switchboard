@@ -1569,12 +1569,19 @@
           <option value="new">${escapeHtml(t("projectNew"))}</option>
         </select></div>
       <div id="pf-existing">
-        <div class="field"><label>${escapeHtml(t("projectDir"))}</label><input type="text" id="pf-dir" placeholder="/ruta/al/repo" /></div>
+        <div class="field"><label>${escapeHtml(t("projectDir"))}</label>
+          <div class="input-row"><input type="text" id="pf-dir" placeholder="/ruta/al/repo" />
+            <button type="button" class="btn" id="pf-browse-dir">${escapeHtml(t("browse"))}</button></div>
+        </div>
       </div>
       <div id="pf-new" style="display:none">
-        <div class="field"><label>${escapeHtml(t("projectParent"))}</label><input type="text" id="pf-parent" placeholder="/ruta/carpeta-padre" /></div>
+        <div class="field"><label>${escapeHtml(t("projectParent"))}</label>
+          <div class="input-row"><input type="text" id="pf-parent" placeholder="/ruta/carpeta-padre" />
+            <button type="button" class="btn" id="pf-browse-parent">${escapeHtml(t("browse"))}</button></div>
+        </div>
         <div class="field"><label>${escapeHtml(t("projectName"))}</label><input type="text" id="pf-name" placeholder="mi-proyecto" /></div>
       </div>
+      <div id="pf-browser"></div>
       <div class="field"><label>${escapeHtml(t("projectAgent"))}</label><input type="text" id="pf-agent" placeholder="${escapeHtml(t("projectAgentHint"))}" /></div>
       <div class="field-error" id="pf-err"></div>
       <button class="btn btn-primary" id="pf-create" type="button">${escapeHtml(t("create"))}</button>
@@ -1583,8 +1590,38 @@
     const toggle = () => {
       overlay.querySelector("#pf-existing").style.display = mode.value === "existing" ? "" : "none";
       overlay.querySelector("#pf-new").style.display = mode.value === "new" ? "" : "none";
+      overlay.querySelector("#pf-browser").innerHTML = "";
     };
     mode.onchange = toggle; toggle();
+    // Folder browser (relay lists local dirs → no typing absolute paths).
+    async function mountBrowser(targetInputId) {
+      const container = overlay.querySelector("#pf-browser");
+      async function render(path) {
+        const data = await fetch(`/api/fs${path ? `?path=${encodeURIComponent(path)}` : ""}`)
+          .then((r) => r.json()).catch(() => ({ error: "fs error" }));
+        if (data.error) { container.innerHTML = `<div class="field-error">${escapeHtml(data.error)}</div>`; return; }
+        const rows = (data.entries || []).map((e) =>
+          `<button type="button" data-path="${escapeHtml(e.path)}" class="fs-row">📁 ${escapeHtml(e.name)}${e.isRepo ? ` <span class="fs-git">git</span>` : ""}</button>`
+        ).join("");
+        container.innerHTML = `<div class="fs-browser">
+          <div class="fs-head">
+            <button type="button" class="btn fs-up" ${data.parent ? "" : "disabled"} title="up">↑</button>
+            <span class="fs-path" title="${escapeHtml(data.path)}">${escapeHtml(data.path)}</span>
+            <button type="button" class="btn btn-primary fs-pick">${escapeHtml(t("useThisFolder"))}</button>
+          </div>
+          <div class="fs-list">${rows || `<div class="fs-empty">${escapeHtml(t("noSubfolders"))}</div>`}</div>
+        </div>`;
+        if (data.parent) container.querySelector(".fs-up").onclick = () => render(data.parent);
+        container.querySelector(".fs-pick").onclick = () => {
+          overlay.querySelector("#" + targetInputId).value = data.path;
+          container.innerHTML = "";
+        };
+        container.querySelectorAll("[data-path]").forEach((b) => { b.onclick = () => render(b.dataset.path); });
+      }
+      render(overlay.querySelector("#" + targetInputId).value.trim() || null);
+    }
+    overlay.querySelector("#pf-browse-dir").onclick = () => mountBrowser("pf-dir");
+    overlay.querySelector("#pf-browse-parent").onclick = () => mountBrowser("pf-parent");
     overlay.querySelector("#pf-close").onclick = closeOverlay;
     overlay.querySelector("#pf-create").onclick = async () => {
       const agentName = overlay.querySelector("#pf-agent").value.trim();

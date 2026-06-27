@@ -2,8 +2,9 @@ import { Router } from "express";
 import Ajv from "ajv";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { existsSync, statSync, mkdirSync, writeFileSync } from "node:fs";
-import { basename, join, isAbsolute } from "node:path";
+import { existsSync, statSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
+import { basename, join, isAbsolute, resolve, dirname } from "node:path";
+import { homedir } from "node:os";
 import { DEFAULT_POLICY, REVIEWER_PROVIDERS, listModels, reviewerCliAvailability, complete } from "../reviewer.js";
 
 const ajv = new Ajv({ allErrors: true, strict: false });
@@ -904,6 +905,30 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     reviewer?.setLocale?.(locale ?? null);
     broadcast({ type: "locale.updated", locale: locale ?? null });
     res.json({ locale: locale ?? null });
+  });
+
+  /* Local filesystem folder browser for the project picker. Lists subdirectories
+   * of `path` (default: home) so the UI can navigate to a repo without typing the
+   * absolute path. Local-only relay → browsing the user's own machine is fine;
+   * returns directory names only, never file contents. */
+  api.get("/fs", (req, res) => {
+    const reqPath = typeof req.query.path === "string" && req.query.path.trim() ? req.query.path.trim() : homedir();
+    let abs;
+    try { abs = resolve(reqPath); } catch { return res.status(400).json({ error: "invalid path" }); }
+    let st;
+    try { st = statSync(abs); } catch { return res.status(400).json({ error: `not found: ${abs}` }); }
+    if (!st.isDirectory()) return res.status(400).json({ error: `not a directory: ${abs}` });
+    let entries;
+    try {
+      entries = readdirSync(abs, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && !d.name.startsWith("."))
+        .map((d) => ({ name: d.name, path: join(abs, d.name), isRepo: existsSync(join(abs, d.name, ".git")) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    const parent = dirname(abs);
+    res.json({ path: abs, parent: parent === abs ? null : parent, isRepo: existsSync(join(abs, ".git")), entries });
   });
 
   /* ---- Projects: a directory + engine + agent identity switchboard can launch.
