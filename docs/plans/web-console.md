@@ -5,6 +5,9 @@
 > proyecto, le asignas/levantas un agente (CLI `claude`/`opencode`) y **ves su
 > consola y lo que hace** mientras lo orquestas — sin saltar entre el IDE/terminal
 > y switchboard.
+>
+> **Alcance fijado:** terminal **interactivo real** (`xterm.js` + node-pty) y
+> **todo en la web** por ahora (el shell desktop queda para una fase futura).
 
 ## Contexto
 
@@ -35,20 +38,22 @@ CLI (claude/opencode) ⇄ PTY/pipe (Node) ⇄ WebSocket ⇄ panel en la UI (brow
 - **Transporte:** WebSocket (switchboard ya tiene `ws` en el mismo `http.Server`).
 - **Cliente:** un panel en la SPA actual, junto a canales/conversaciones/master.
 
-### Dos modos (decidir por fase)
+### Modo elegido: terminal real (B), todo web
 
-- **Modo A — headless + diff (Fase 0, sin dependencia nativa):** se corre el CLI
-  no-interactivo (`claude -p …`, `opencode run …`), se transmite su stdout como
-  **log** y se muestra el **`git diff` en vivo** del directorio (reusa lo del
-  code-review del master). Cero deps nativas, fricción de instalación cero.
-- **Modo B — terminal real (Fase 1, interactiva):** `xterm.js` en el navegador +
-  **node-pty** en el servidor (pseudo-terminal → TUIs, colores, input). node-pty
-  es **módulo nativo**; mitigación: usar prebuilds
-  (`@homebridge/node-pty-prebuilt-multiarch`) o reservarlo para el shell desktop
-  (Electron) donde es estándar.
+**Decisión fijada:** terminal **interactivo real** + **todo en la web** por ahora
+(sin shell desktop).
 
-> Decisión inicial: **empezar por Modo A**. Da el 80% del valor ("ver qué hace")
-> sin tocar la filosofía "Node puro, sin build", y valida la vista única.
+- **`xterm.js`** en el navegador (el mismo emulador de VS Code) dentro de un panel
+  de la SPA actual.
+- **node-pty** en el servidor: lanza el CLI en un **pseudo-terminal** → TUIs,
+  colores e **input interactivo** (puedes escribir/responder prompts del CLI desde
+  la web).
+- **WebSocket** bidireccional: salida del PTY → `xterm` y teclas → PTY.
+- node-pty es **módulo nativo**: se incluye vía **prebuilds**
+  (`@homebridge/node-pty-prebuilt-multiarch`) para no exigir compilación al
+  instalar. (En el futuro shell desktop/Electron node-pty es estándar.)
+- El **`git diff` en vivo** del directorio se mantiene como **panel complementario
+  opcional** ("ver el código que crea"), no como sustituto del terminal.
 
 ## Pilar 2 — Vincular agente ↔ proyecto ("mover un agente a un proyecto")
 
@@ -118,28 +123,35 @@ Estado de proceso (en memoria, no persiste): `{ projectId, pid, status, startedA
 
 ## Fases
 
-- **Fase 0 — Proof, vista única (Modo A, sin deps nativas):**
-  manager mínimo + crear proyecto (existente/nuevo) + arrancar un `claude`/
-  `opencode` headless + panel con **log + `git diff` en vivo** + el agente
-  conectado al relay para recibir un mensaje del **master**. *Si este lazo
-  convence, el producto existe.*
-- **Fase 1 — Terminal real:** `xterm.js` + node-pty (prebuilt) con input
-  interactivo; resize, colores, TUIs.
-- **Fase 2 — Pulido de ciclo de vida:** multi-agente/multi-proyecto, reinicio,
-  logs persistidos, manejo de crashes, paridad CLI.
+- **Fase 0 — Proof, vista única (terminal real):** manager mínimo + crear proyecto
+  (existente/nuevo) + arrancar `claude`/`opencode` en **PTY** (node-pty prebuilt) +
+  panel **`xterm.js`** con I/O interactivo por WebSocket + el agente conectado al
+  relay para recibir un mensaje del **master**. *Si este lazo convence, el producto
+  existe.*
+- **Fase 1 — Robustez del terminal:** resize/fit (addon), reconexión del WS,
+  scrollback, búsqueda, **multi-terminal** (varios agentes a la vez) y el panel de
+  `git diff` complementario.
+- **Fase 2 — Pulido de ciclo de vida:** multi-proyecto, reinicio, logs
+  persistidos, manejo de crashes, paridad con el CLI `switchboard project …`.
 - **Fase 3 (futuro, fuera de esta rama):** shell desktop (Electron) reusando la
   misma UI + manager; licencia/suscripción.
 
-## Decisiones abiertas
+## Decisiones
 
-1. **Modo A vs B para v1** → propuesta: **A** primero.
-2. **node-pty**: prebuilds vs compilar vs sólo en Electron.
-3. **Proyectos en config.json vs tabla en el store** → propuesta: **config.json**
+**Fijadas:**
+1. **Terminal real (Modo B)** desde v1 — `xterm.js` + node-pty.
+2. **Todo web por ahora** — sin shell desktop (Electron queda para Fase 3).
+3. **node-pty vía prebuilds** (`@homebridge/node-pty-prebuilt-multiarch`).
+
+**Abiertas:**
+4. **Proyectos en config.json vs tabla en el store** → propuesta: **config.json**
    (son definición/config, no mensajería).
-4. **Auto-conectar identidad**: ¿`switchboard install` automático al crear el
+5. **Auto-conectar identidad**: ¿`switchboard install` automático al crear el
    proyecto, o paso explícito? → propuesta: automático al **arrancar** el agente.
-5. **Permisos del CLi**: ¿surfacear los prompts de permiso del CLI en la UI
-   (Modo B) o dejarlos al CLI? → fuera del alcance inicial.
+6. **Permisos del CLI**: ¿surfacear los prompts de permiso del CLI en la UI o
+   dejarlos al CLI? → con terminal real puedes **responderlos en el propio
+   terminal**; surfacearlos como aprobación estructurada queda fuera del alcance
+   inicial.
 
 ## Riesgos
 
