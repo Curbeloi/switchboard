@@ -60,7 +60,10 @@ export async function startRelay({
   }
 
   // Launches/supervises engine CLIs (Claude Code) as PTY agents per project.
-  const agents = createAgentManager({ relay: `http://${host}:${port}`, broadcast });
+  const agents = createAgentManager({ relay: `http://${host}:${port}`, broadcast, store });
+  // Persisted projects' agents should exist as identities on boot (visible +
+  // addable to channels even before they're started).
+  for (const p of config.readProjects()) agents.registerIdentity(p.agentName);
 
   mountRoutes(app, { store, broadcast, reviewer, config, agents });
 

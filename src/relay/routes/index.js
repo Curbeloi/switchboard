@@ -968,6 +968,7 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
       }
       const finalAgent = config.validName(agentName) ? agentName : projectName;
       const project = config.addProject({ name: projectName, dir: projectDir, engine, agentName: finalAgent });
+      agents?.registerIdentity?.(project.agentName); // appears + addable to channels right away
       broadcast({ type: "project.created", project });
       res.json(project);
     } catch (err) {
