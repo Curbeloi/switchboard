@@ -1648,13 +1648,16 @@
     consoleStatusEl.textContent = s;
     consoleStatusEl.className = "console-status " + s;
   }
-  // xterm palette that matches the UI theme: near-black in dark, light w/ dark text
-  // in light. `white`/`brightWhite` are remapped dark so light-fg output stays legible.
+  // The terminal stays dark in both themes (so the CLI's light-coloured output is
+  // always legible); light mode just uses a lighter charcoal instead of near-black.
   function consoleTheme() {
     const dark = document.documentElement.classList.contains("dark");
-    return dark
-      ? { background: "#0b0f1a", foreground: "#e2e8f0", cursor: "#e2e8f0", selectionBackground: "#334155" }
-      : { background: "#ffffff", foreground: "#1e293b", cursor: "#334155", selectionBackground: "#bfdbfe", white: "#334155", brightWhite: "#0f172a" };
+    return {
+      background: dark ? "#0b0f1a" : "#1e293b",
+      foreground: "#e2e8f0",
+      cursor: "#e2e8f0",
+      selectionBackground: "#475569",
+    };
   }
   function openConsole(p) {
     closeConsole();
