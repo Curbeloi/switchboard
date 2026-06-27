@@ -15,14 +15,16 @@
 .overlay[hidden] { display: none; }
 
 /* Live agent console (xterm.js). Docked over the center column (not a modal):
- * fills #feed so the left/right sidebars stay visible while you watch the agent. */
+ * fills #feed so the left/right sidebars stay visible while you watch the agent.
+ * Light surface in light mode, near-black in dark mode (the xterm theme is set to
+ * match in app.js). */
 .console-pane {
   position: absolute;
   inset: 0;
   z-index: 20;
   display: flex;
   flex-direction: column;
-  background: #0b0f1a;
+  background: #ffffff;
   overflow: hidden;
 }
 .console-pane[hidden] { display: none; }
@@ -32,21 +34,28 @@
   justify-content: space-between;
   gap: 10px;
   padding: 8px 12px;
-  background: #111827;
-  border-bottom: 1px solid #1e293b;
-  color: #e2e8f0;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+  color: #0f172a;
   font-size: 13px;
 }
 .console-status {
   font-size: 11px;
   padding: 1px 8px;
   border-radius: 999px;
-  background: #1e293b;
-  color: #94a3b8;
+  background: #e2e8f0;
+  color: #64748b;
 }
-.console-status.running { background: rgba(22, 163, 74, 0.2); color: #4ade80; }
-.console-status.exited, .console-status.stopped { background: rgba(148, 163, 184, 0.2); color: #cbd5e1; }
-.console-term { flex: 1; min-height: 0; padding: 6px 8px; background: #0b0f1a; }
+.console-status.running { background: rgba(22, 163, 74, 0.15); color: #16a34a; }
+.console-status.exited, .console-status.stopped { background: rgba(148, 163, 184, 0.2); color: #64748b; }
+.console-term { flex: 1; min-height: 0; padding: 6px 8px; background: #ffffff; }
+
+.dark .console-pane { background: #0b0f1a; }
+.dark .console-bar { background: #111827; border-bottom-color: #1e293b; color: #e2e8f0; }
+.dark .console-status { background: #1e293b; color: #94a3b8; }
+.dark .console-status.running { background: rgba(22, 163, 74, 0.2); color: #4ade80; }
+.dark .console-status.exited, .dark .console-status.stopped { background: rgba(148, 163, 184, 0.2); color: #cbd5e1; }
+.dark .console-term { background: #0b0f1a; }
 
 .panel {
   background: #ffffff;

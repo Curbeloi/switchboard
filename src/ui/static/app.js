@@ -112,15 +112,22 @@
   /* ---------- col 1: channels + agents ---------- */
 
   function renderAgents() {
-    if (agents.size === 0) {
+    // Merge registered agents (connected over MCP) with the agents of running
+    // projects (just launched, not yet connected) so a launched agent shows up
+    // immediately. Green = connected; amber = launching.
+    const launched = (typeof projects !== "undefined" ? projects : [])
+      .filter((p) => p.status === "running").map((p) => p.agentName);
+    const names = [...new Set([...agents.keys(), ...launched])].sort();
+    if (names.length === 0) {
       agentsList.innerHTML = `<li class="text-xs text-slate-400 italic px-2">${escapeHtml(t("noAgents"))}</li>`;
       return;
     }
     agentsList.innerHTML = "";
-    for (const a of agents.values()) {
+    for (const name of names) {
+      const connected = agents.has(name);
       const li = document.createElement("li");
-      li.className = "text-xs font-mono text-slate-700 dark:text-slate-300 px-2 py-0.5";
-      li.textContent = a.name;
+      li.className = "flex items-center gap-1.5 text-xs font-mono text-slate-700 dark:text-slate-300 px-2 py-0.5";
+      li.innerHTML = `<span class="w-1.5 h-1.5 rounded-full ${connected ? "bg-green-500" : "bg-amber-500"} shrink-0" title="${escapeHtml(connected ? t("agentConnected") : t("agentLaunching"))}"></span><span class="truncate">${escapeHtml(name)}</span>`;
       agentsList.appendChild(li);
     }
   }
@@ -1428,6 +1435,8 @@
   function applyTheme(pref) {
     const dark = pref === "dark" || (pref === "auto" && mql.matches);
     document.documentElement.classList.toggle("dark", dark);
+    // Keep an open agent console in sync with the theme.
+    if (term && term.options) { try { term.options.theme = consoleTheme(); } catch { /* noop */ } }
   }
   // React to OS theme changes while in "auto".
   mql.addEventListener("change", () => {
@@ -1518,6 +1527,7 @@
     try { projects = await fetch("/api/projects").then((r) => r.json()); }
     catch { projects = []; }
     renderProjects();
+    renderAgents(); // launched project agents show in the agents list too
   }
   function renderProjects() {
     projectsList.innerHTML = "";
@@ -1638,6 +1648,14 @@
     consoleStatusEl.textContent = s;
     consoleStatusEl.className = "console-status " + s;
   }
+  // xterm palette that matches the UI theme: near-black in dark, light w/ dark text
+  // in light. `white`/`brightWhite` are remapped dark so light-fg output stays legible.
+  function consoleTheme() {
+    const dark = document.documentElement.classList.contains("dark");
+    return dark
+      ? { background: "#0b0f1a", foreground: "#e2e8f0", cursor: "#e2e8f0", selectionBackground: "#334155" }
+      : { background: "#ffffff", foreground: "#1e293b", cursor: "#334155", selectionBackground: "#bfdbfe", white: "#334155", brightWhite: "#0f172a" };
+  }
   function openConsole(p) {
     closeConsole();
     consoleProjectId = p.id;
@@ -1647,7 +1665,7 @@
     term = new Terminal({
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, monospace',
       fontSize: 13, cursorBlink: true, scrollback: 5000,
-      theme: { background: "#0b0f1a" },
+      theme: consoleTheme(),
     });
     fitAddon = new FitAddon.FitAddon();
     term.loadAddon(fitAddon);
