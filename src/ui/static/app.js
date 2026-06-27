@@ -52,7 +52,7 @@
   const settingsBtn = document.getElementById("settings-btn");
   const projectsList = document.getElementById("projects");
   const projectAddBtn = document.getElementById("project-add-btn");
-  const consoleOverlay = document.getElementById("console-overlay");
+  const consolePane = document.getElementById("console-pane");
   const consoleAgentEl = document.getElementById("console-agent");
   const consoleStatusEl = document.getElementById("console-status");
   const termEl = document.getElementById("term");
@@ -1643,7 +1643,7 @@
     consoleProjectId = p.id;
     consoleAgentEl.textContent = `${p.agentName} · ${p.dir}`;
     setConsoleStatus(p.status || "running");
-    consoleOverlay.hidden = false;
+    consolePane.hidden = false;
     term = new Terminal({
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, monospace',
       fontSize: 13, cursorBlink: true, scrollback: 5000,
@@ -1672,7 +1672,7 @@
     if (consoleResizeFn) { window.removeEventListener("resize", consoleResizeFn); consoleResizeFn = null; }
     if (consoleWs) { try { consoleWs.close(); } catch { /* noop */ } consoleWs = null; }
     if (term) { try { term.dispose(); } catch { /* noop */ } term = null; fitAddon = null; }
-    consoleOverlay.hidden = true;
+    consolePane.hidden = true;
     consoleProjectId = null;
   }
   projectAddBtn.onclick = openProjectForm;

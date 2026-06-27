@@ -14,20 +14,18 @@
 }
 .overlay[hidden] { display: none; }
 
-/* Live agent console (xterm.js). Near-fullscreen dark surface over everything. */
-.console-overlay {
-  position: fixed;
-  inset: 24px;
-  z-index: 60;
+/* Live agent console (xterm.js). Docked over the center column (not a modal):
+ * fills #feed so the left/right sidebars stay visible while you watch the agent. */
+.console-pane {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
   display: flex;
   flex-direction: column;
   background: #0b0f1a;
-  border: 1px solid #1e293b;
-  border-radius: 10px;
-  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
   overflow: hidden;
 }
-.console-overlay[hidden] { display: none; }
+.console-pane[hidden] { display: none; }
 .console-bar {
   display: flex;
   align-items: center;
