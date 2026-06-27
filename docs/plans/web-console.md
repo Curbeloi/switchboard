@@ -6,8 +6,9 @@
 > consola y lo que hace** mientras lo orquestas — sin saltar entre el IDE/terminal
 > y switchboard.
 >
-> **Alcance fijado:** terminal **interactivo real** (`xterm.js` + node-pty) y
-> **todo en la web** por ahora (el shell desktop queda para una fase futura).
+> **Alcance fijado:** terminal **interactivo real** (`xterm.js` + node-pty),
+> **todo en la web** por ahora (el shell desktop queda para una fase futura), y
+> **solo Claude Code** como motor por ahora (opencode más adelante).
 
 ## Contexto
 
@@ -89,9 +90,11 @@ Levantar el agente de un proyecto:
   `stopAgent`, `listManaged`, eventos `agentproc.started|output|exited`. Estado de
   procesos **en memoria** (transitorio por naturaleza, como los waiters de
   `agent_wait`). Lanza CLIs vía `child_process` (Modo A) o node-pty (Modo B).
-- **Adaptador de motor (nuevo):** `src/relay/agents/drivers/` con un contrato
-  `AgentDriver { id, isAvailable(), spawnArgs({dir, task}) }` para `claude` y
-  `opencode`. Así no nos casamos con un CLI.
+- **Motor (solo Claude Code por ahora):** Fase 0 implementa el motor `claude`
+  directo (spawn de `claude` + el `install` actual para el cableado). Se deja una
+  **costura mínima** (`engine` en el proyecto + un punto único donde se arma el
+  spawn/install) para que **opencode** entre después como segundo driver
+  (`AgentDriver { id, isAvailable(), spawnArgs, install }`) sin reescribir.
 - **Definiciones de proyecto (persisten):** en el config store durable
   (`src/relay/config.js`) como `projects.json` (mismo patrón que
   contracts/policy/mode). Sobreviven reinicios; el estado de proceso no.
@@ -142,16 +145,16 @@ Estado de proceso (en memoria, no persiste): `{ projectId, pid, status, startedA
 1. **Terminal real (Modo B)** desde v1 — `xterm.js` + node-pty.
 2. **Todo web por ahora** — sin shell desktop (Electron queda para Fase 3).
 3. **node-pty vía prebuilds** (`@homebridge/node-pty-prebuilt-multiarch`).
+4. **Solo Claude Code** como motor por ahora (opencode después).
+5. **Proyectos en `config.json`** (junto a mode/policy/contracts; no en el store).
+6. **`switchboard install` automático al arrancar** el agente (no como paso
+   aparte). El `<nombre>` = identidad única en el relay; por defecto el nombre de
+   la carpeta, editable; token persistido por proyecto.
 
 **Abiertas:**
-4. **Proyectos en config.json vs tabla en el store** → propuesta: **config.json**
-   (son definición/config, no mensajería).
-5. **Auto-conectar identidad**: ¿`switchboard install` automático al crear el
-   proyecto, o paso explícito? → propuesta: automático al **arrancar** el agente.
-6. **Permisos del CLI**: ¿surfacear los prompts de permiso del CLI en la UI o
-   dejarlos al CLI? → con terminal real puedes **responderlos en el propio
-   terminal**; surfacearlos como aprobación estructurada queda fuera del alcance
-   inicial.
+7. **Permisos del CLI**: con terminal real puedes **responder los prompts en el
+   propio terminal**; surfacearlos como aprobación estructurada queda fuera del
+   alcance inicial.
 
 ## Riesgos
 
@@ -175,6 +178,7 @@ Estado de proceso (en memoria, no persiste): `{ projectId, pid, status, startedA
 
 ## Fuera de alcance (por ahora)
 
+- **opencode y otros motores** (se añaden luego como segundo driver).
 - Editor de código humano (no es el negocio; reusamos CLIs).
 - Interceptar cada acción local del agente (lo gobierna el CLI).
 - Shell desktop y licencia/suscripción (Fase 3, otra rama).
