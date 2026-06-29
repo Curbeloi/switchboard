@@ -217,7 +217,10 @@
 .dark .field input[type="password"],
 .dark .field textarea,
 .dark .field select {
-  background: #0f172a; /* slate-900 */
+  /* Use background-color (not the `background` shorthand) so we don't reset the
+     chevron's background-repeat/position/size set in the light rule above —
+     otherwise the arrow tiles across the whole select in dark mode. */
+  background-color: #0f172a; /* slate-900 */
   color: #f1f5f9;
   border-color: #475569; /* slate-600 */
 }
