@@ -28,30 +28,30 @@ Usage:
       Defaults: --relay http://127.0.0.1:8765
 
   switchboard listen --agent NAME [--relay URL] [--interval SECONDS] [--all]
-                     [--once] [--channel NAME]... [--exclude NAME]...
+                     [--once] [--conversation ID]... [--exclude ID]...
       Background listener: poll the relay's read-only API and print one line per
       new message addressed to NAME (mentions + DMs). Uses no agent token (no
       identity collision, never marks messages read). --all notifies on every
-      message in your channels. Scope the wakeup with --channel (allowlist: only
-      these channels wake you, repeatable/comma-separated) and/or --exclude
-      (denylist: never these, e.g. --exclude dm:back+front). Filtering happens in
-      the listener, so it narrows the wakeup without touching membership/inbox
-      and survives the auto-join that re-adds you on a DM/@mention. With --once it
+      message in your conversations. Scope the wakeup with --conversation
+      (allowlist: only these conversation ids wake you, repeatable/comma-separated)
+      and/or --exclude (denylist: never these ids). Filtering happens in the
+      listener, so it narrows the wakeup without touching membership/inbox and
+      survives the auto-join that re-adds you on a DM/@mention. With --once it
       blocks until the next matching message, prints it, and EXITS — so a Claude
       Code agent running it as a background task gets woken on the exit; it then
       reads/replies and relaunches it (event-driven auto-detection). A persisted
       watermark makes relaunches gapless. Defaults: --relay
       http://127.0.0.1:8765, --interval 10.
 
-  switchboard send --agent NAME (--channel NAME | --dm AGENT) [--to AGENT]...
+  switchboard send --agent NAME (--conversation ID | --dm AGENT) [--to AGENT]...
                    [--data JSON] [--contract NAME] [--schema JSON] [CONTENT]
       Send ONE message without the MCP server — a fallback for when an agent's
       MCP tools are unavailable mid-session (the stdio server dropped). Reads the
       agent's persisted token from ~/.switchboard/tokens.json and POSTs to the
       relay; mirrors the agent_send/agent_dm tools. CONTENT is the message body
       (positional) or piped on stdin (handy for long, multi-line bodies). Use
-      --channel for a named channel (with optional --to @mentions) or --dm for a
-      1:1. Defaults: --relay http://127.0.0.1:8765
+      --conversation for a conversation id (with optional --to @mentions) or --dm
+      for a 1:1. Defaults: --relay http://127.0.0.1:8765
 
   switchboard install --agent NAME [--relay URL] [--scope SCOPE] [--force]
       Register the switchboard MCP server for this project via the claude CLI
@@ -143,7 +143,7 @@ try {
         interval: { type: "string", default: "10" },
         all: { type: "boolean", default: false },
         once: { type: "boolean", default: false },
-        channel: { type: "string", multiple: true },
+        conversation: { type: "string", multiple: true },
         exclude: { type: "string", multiple: true },
       },
       strict: true,
@@ -165,7 +165,7 @@ try {
       intervalMs: Math.max(2, Number.isFinite(seconds) ? seconds : 10) * 1000,
       all: values.all,
       once: values.once,
-      channels: splitNames(values.channel),
+      conversations: splitNames(values.conversation),
       exclude: splitNames(values.exclude),
     });
   } else if (subcommand === "send") {
@@ -174,7 +174,7 @@ try {
       options: {
         agent: { type: "string" },
         relay: { type: "string", default: "http://127.0.0.1:8765" },
-        channel: { type: "string" },
+        conversation: { type: "string" },
         dm: { type: "string" },
         to: { type: "string", multiple: true },
         data: { type: "string" },
@@ -203,7 +203,7 @@ try {
     await runSend({
       agent: values.agent,
       relayUrl: values.relay,
-      channel: values.channel ?? null,
+      conversation: values.conversation ?? null,
       dm: values.dm ?? null,
       to,
       content: positionals.length ? positionals.join(" ") : undefined,

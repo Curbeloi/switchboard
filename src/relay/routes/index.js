@@ -6,6 +6,7 @@ import { existsSync, statSync, mkdirSync, writeFileSync, readdirSync } from "nod
 import { basename, join, isAbsolute, resolve, dirname } from "node:path";
 import { homedir } from "node:os";
 import { DEFAULT_POLICY, REVIEWER_PROVIDERS, listModels, reviewerCliAvailability, complete } from "../reviewer.js";
+import { VALID_ENGINES } from "../config.js";
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 const execFileAsync = promisify(execFile);
@@ -81,14 +82,13 @@ function masterTranscript(messages) {
   return recent.map((m) => `${m.from}: ${String(m.content || "").replace(/\s+/g, " ")}`).join("\n");
 }
 /* Where the master is acting — pinned at the top of every prompt so the composed
- * message stays anchored to THIS channel + conversation (and the recipients here),
- * instead of drifting into "spin up a new channel". */
+ * message stays anchored to THIS conversation (and the recipients here), instead
+ * of drifting into "spin up a new conversation". */
 function masterContext(conv, members = []) {
   return (
-    `Channel: ${conv.channel}\n` +
     `Conversation: "${conv.title}" (id ${conv.id})\n` +
     `Purpose: ${conv.purpose || "(none)"}\n` +
-    `Agents in this channel: ${members.length ? members.join(", ") : "(none listed)"}`
+    `Agents in this conversation: ${members.length ? members.join(", ") : "(none listed)"}`
   );
 }
 function masterComposePrompt(conv, transcript, instruction, locale = null, members = []) {
@@ -97,10 +97,10 @@ function masterComposePrompt(conv, transcript, instruction, locale = null, membe
       'You are "master", the human supervisor and mediator of a multi-agent coding conversation — the highest authority in it. ' +
       "The supervisor gives you an instruction in their own words; turn it into a clear, direct, authoritative message to the " +
       "agent(s) that they are expected to follow, grounded in the conversation so far. " +
-      "Your message will be posted INTO THIS SAME channel and conversation and read by the agents already here. " +
-      "Keep all work in the current channel and conversation: do NOT tell agents to create, switch to, or open a new " +
-      "channel or conversation unless the supervisor's instruction explicitly asks for that. When the instruction says " +
-      'to "start something new", it means a new task WITHIN this conversation, not a new channel. ' +
+      "Your message will be posted INTO THIS SAME conversation and read by the agents already here. " +
+      "Keep all work in the current conversation: do NOT tell agents to create, switch to, or open a new " +
+      "conversation unless the supervisor's instruction explicitly asks for that. When the instruction says " +
+      'to "start something new", it means a new task WITHIN this conversation. ' +
       "Output ONLY the message to send — no preamble, no quotes, no markdown fences." +
       masterLangLine(locale),
     user:
@@ -178,74 +178,18 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
   });
   api.get("/agents", (_req, res) => res.json(store.listAgents()));
 
-  /* Channels */
-  api.get("/channels", (_req, res) => res.json(store.listChannels()));
-
-  api.post("/channels", (req, res) => {
-    const { name } = req.body ?? {};
-    if (!name || typeof name !== "string") {
-      return res.status(400).json({ error: "name required (string)" });
-    }
-    const channel = store.createChannel(name);
-    broadcast({ type: "channel.updated", channel });
-    res.json(channel);
+  /* Conversations — the room itself (members, message stream, state doc, optional
+   * DSP contract). Either an agent (Bearer token) or a human supervisor (no
+   * token) can open one; the human is recorded as `createdBy: "supervisor"`. */
+  api.get("/conversations", (req, res) => {
+    const status = req.query.status ? String(req.query.status) : null;
+    const filter = status && status !== "all" ? status : null;
+    res.json(store.listConversations(filter));
   });
 
-  api.delete("/channels/:channel", (req, res) => {
-    const name = req.params.channel;
-    if (!store.deleteChannel(name)) {
-      return res.status(404).json({ error: "channel not found" });
-    }
-    broadcast({ type: "channel.deleted", name });
-    res.json({ ok: true });
-  });
-
-  api.post("/channels/:channel/join", (req, res) => {
-    const agent = requireAgent(req, res);
-    if (!agent) return;
-    const result = store.joinChannel(req.params.channel, agent.name);
-    broadcast({ type: "channel.updated", channel: result });
-    res.json(result);
-  });
-
-  api.post("/channels/:channel/leave", (req, res) => {
-    const agent = requireAgent(req, res);
-    if (!agent) return;
-    const result = store.leaveChannel(req.params.channel, agent.name);
-    if (!result) return res.status(404).json({ error: "channel not found" });
-    broadcast({ type: "channel.updated", channel: result });
-    res.json(result);
-  });
-
-  /* Supervisor-driven membership (human surface, no token) — the web equivalent
-   * of the REPL's addto/removefrom: add or remove a registered agent. */
-  api.post("/channels/:channel/members", (req, res) => {
-    const { agent } = req.body ?? {};
-    if (!agent || typeof agent !== "string") {
-      return res.status(400).json({ error: "agent required (string)" });
-    }
-    if (!store.hasAgent(agent)) {
-      return res.status(404).json({ error: `unknown agent "${agent}" (not registered)` });
-    }
-    const channel = store.joinChannel(req.params.channel, agent);
-    broadcast({ type: "channel.updated", channel });
-    res.json(channel);
-  });
-  api.delete("/channels/:channel/members/:agent", (req, res) => {
-    const channel = store.leaveChannel(req.params.channel, req.params.agent);
-    if (!channel) return res.status(404).json({ error: "channel not found" });
-    broadcast({ type: "channel.updated", channel });
-    res.json(channel);
-  });
-
-  /* Conversations (threads inside a channel) — every loop lives in one.
-   * Either an agent (Bearer token) or a human supervisor (no token) can open
-   * a conversation; the human is recorded as `createdBy: "supervisor"`.
-   * Optional `contract_name` makes this a DSP-governed conversation: all
-   * messages posted to it must carry `data` matching the named contract. */
-  api.post("/channels/:channel/conversations", (req, res) => {
+  api.post("/conversations", (req, res) => {
     const agent = optionalAgent(req);
-    const { title, purpose = null, successCriteria = null, contract_name = null } = req.body ?? {};
+    const { title, purpose = null, successCriteria = null, contract_name = null, members, project_id = null } = req.body ?? {};
     if (!title || typeof title !== "string") {
       return res.status(400).json({ error: "title required (string)" });
     }
@@ -263,19 +207,96 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
         return res.status(400).json({ error: `unknown contract: ${contract_name}` });
       }
     }
+    // Optional invite list — must be registered agents.
+    const invite = (Array.isArray(members) ? members : []).filter((n) => typeof n === "string" && n.length);
+    const unknown = invite.filter((n) => !store.hasAgent(n));
+    if (unknown.length) {
+      return res.status(400).json({ error: `unknown agent(s): ${unknown.join(", ")}` });
+    }
+    // Optional project link — the conversation belongs to a known project, and
+    // that project's environment agents are auto-invited so it's wired up.
+    let projectId = null;
+    if (project_id != null && project_id !== "") {
+      if (typeof project_id !== "string" || !config) {
+        return res.status(400).json({ error: "project_id must be a known project" });
+      }
+      const proj = config.getProject(project_id);
+      if (!proj) return res.status(400).json({ error: `unknown project: ${project_id}` });
+      projectId = project_id;
+      for (const env of config.environmentsOfProject(project_id)) {
+        if (env.agentName && store.hasAgent(env.agentName) && !invite.includes(env.agentName)) {
+          invite.push(env.agentName);
+        }
+      }
+    }
     const createdBy = agent?.name ?? "supervisor";
+    // The state doc is seeded inside store.createConversation (every creation
+    // path gets the PROGRESS.md skeleton, never blank); the creator + invited
+    // agents are auto-joined as members.
     const conv = store.createConversation({
-      channel: req.params.channel,
       title,
       purpose,
       successCriteria,
       contractName: contract_name,
+      projectId,
       createdBy,
+      members: invite,
     });
-    if (agent) store.joinChannel(req.params.channel, agent.name);
-    // The state doc is seeded inside store.createConversation (so every creation
-    // path — route, auto-create, DM — gets the PROGRESS.md skeleton, never blank).
     broadcast({ type: "conversation.created", conversation: conv });
+    res.json(conv);
+  });
+
+  api.get("/conversations/:id", (req, res) => {
+    const conv = store.getConversation(req.params.id);
+    if (!conv) return res.status(404).json({ error: "conversation not found" });
+    res.json(conv);
+  });
+
+  /* Delete a conversation and everything keyed on it (the web/REPL equivalent of
+   * the old delchan). */
+  api.delete("/conversations/:id", (req, res) => {
+    if (!store.deleteConversation(req.params.id)) {
+      return res.status(404).json({ error: "conversation not found" });
+    }
+    broadcast({ type: "conversation.deleted", id: req.params.id });
+    res.json({ ok: true });
+  });
+
+  /* Membership: an agent joins/leaves itself (token); the supervisor adds or
+   * removes any registered agent (no token — the human surface). */
+  api.post("/conversations/:id/join", (req, res) => {
+    const agent = requireAgent(req, res);
+    if (!agent) return;
+    const conv = store.joinConversation(req.params.id, agent.name);
+    if (!conv) return res.status(404).json({ error: "conversation not found" });
+    broadcast({ type: "conversation.updated", conversation: conv });
+    res.json(conv);
+  });
+  api.post("/conversations/:id/leave", (req, res) => {
+    const agent = requireAgent(req, res);
+    if (!agent) return;
+    const conv = store.leaveConversation(req.params.id, agent.name);
+    if (!conv) return res.status(404).json({ error: "conversation not found" });
+    broadcast({ type: "conversation.updated", conversation: conv });
+    res.json(conv);
+  });
+  api.post("/conversations/:id/members", (req, res) => {
+    const { agent } = req.body ?? {};
+    if (!agent || typeof agent !== "string") {
+      return res.status(400).json({ error: "agent required (string)" });
+    }
+    if (!store.hasAgent(agent)) {
+      return res.status(404).json({ error: `unknown agent "${agent}" (not registered)` });
+    }
+    const conv = store.joinConversation(req.params.id, agent);
+    if (!conv) return res.status(404).json({ error: "conversation not found" });
+    broadcast({ type: "conversation.updated", conversation: conv });
+    res.json(conv);
+  });
+  api.delete("/conversations/:id/members/:agent", (req, res) => {
+    const conv = store.leaveConversation(req.params.id, req.params.agent);
+    if (!conv) return res.status(404).json({ error: "conversation not found" });
+    broadcast({ type: "conversation.updated", conversation: conv });
     res.json(conv);
   });
 
@@ -294,18 +315,6 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     const conv = store.setConversationContract(req.params.id, contract_name);
     if (!conv) return res.status(404).json({ error: "conversation not found" });
     broadcast({ type: "conversation.updated", conversation: conv });
-    res.json(conv);
-  });
-
-  api.get("/channels/:channel/conversations", (req, res) => {
-    const status = req.query.status ? String(req.query.status) : null;
-    const filter = status && status !== "all" ? status : null;
-    res.json(store.listConversations(req.params.channel, filter));
-  });
-
-  api.get("/conversations/:id", (req, res) => {
-    const conv = store.getConversation(req.params.id);
-    if (!conv) return res.status(404).json({ error: "conversation not found" });
     res.json(conv);
   });
 
@@ -354,7 +363,7 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     }
     const transcript = masterTranscript(store.readMessages({ conversationId: conv.id, since: 0 }));
     const locale = config?.readConfig().locale ?? null;
-    const members = store.channelMembers(conv.channel).filter((n) => n !== "master");
+    const members = store.conversationMembers(conv.id).filter((n) => n !== "master");
     const prompt =
       mode === "analyze"
         ? masterAnalyzePrompt(conv, transcript, instruction, locale, members)
@@ -410,7 +419,7 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
       const unknown = to.filter((n) => !store.hasAgent(n));
       if (unknown.length) return res.status(400).json({ error: `unknown agent(s): ${unknown.join(", ")}` });
     } else {
-      to = store.channelMembers(conv.channel).filter((n) => n !== "master"); // default: everyone
+      to = store.conversationMembers(conv.id).filter((n) => n !== "master"); // default: everyone
     }
     let msg = store.postMessage({ conversationId: conv.id, from: "master", content, to });
     if (msg.status === "pending") {
@@ -421,7 +430,8 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
         by: "master",
       }) || msg;
     }
-    store.leaveChannel(conv.channel, "master"); // master is not a persistent member
+    // master is never a persistent member (the store skips it on post), so there
+    // is nothing to leave.
     broadcast({ type: "message.delivered", message: msg });
     res.json(msg);
   });
@@ -439,7 +449,6 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
       broadcast({
         type: "message.read",
         conversationId,
-        channel: conv.channel,
         agent: agent.name,
         at: Date.now(),
       });
@@ -480,8 +489,8 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     res.json(state);
   });
 
-  /* Direct message: canonical 2-member channel; DMs use a perpetual default
-   * conversation auto-created on first DM (so the 1:1 ergonomics are preserved). */
+  /* Direct message: resolve (or create) the canonical 1:1 conversation between
+   * the two agents and post into it. The 1:1 lives forever (reopened if closed). */
   api.post("/dm", (req, res) => {
     const agent = requireAgent(req, res);
     if (!agent) return;
@@ -492,15 +501,16 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     if (typeof content !== "string") {
       return res.status(400).json({ error: "content required (string)" });
     }
-    const channel = store.dmChannelName(agent.name, to);
-    store.joinChannel(channel, agent.name);
-    const membership = store.joinChannel(channel, to);
-    broadcast({ type: "channel.updated", channel: membership });
-    const dmConv = store.ensureDmConversation(channel);
+    if (!store.hasAgent(to)) {
+      return res.status(400).json({ error: `unknown agent: ${to}` });
+    }
+    const conv = store.ensureDmConversation(agent.name, to);
+    broadcast({ type: "conversation.updated", conversation: conv });
     const msg = store.postMessage({
-      conversationId: dmConv.id,
+      conversationId: conv.id,
       from: agent.name,
       content,
+      to: [to],
     });
     broadcast({
       type: msg.status === "pending" ? "message.pending" : "message.delivered",
@@ -509,12 +519,16 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     res.json(msg);
   });
 
-  /* Messages — always inside a conversation. If `conversation` is omitted on a
-   * regular channel post, the latest open conversation is used (409 if none). */
-  api.post("/channels/:channel/messages", (req, res) => {
+  /* Post a message into a conversation. `to` @mentions specific members (everyone
+   * in the conversation still sees it; tagged agents are flagged it's for them).
+   * A conversation may carry a DSP contract: `data` is then required and validated
+   * against the contract's schema before the message is ever queued. */
+  api.post("/conversations/:id/messages", (req, res) => {
     const agent = requireAgent(req, res);
     if (!agent) return;
-    const channel = req.params.channel;
+    const conv = store.getConversation(req.params.id);
+    if (!conv) return res.status(404).json({ error: "conversation not found" });
+    if (conv.status !== "open") return res.status(400).json({ error: "conversation is closed" });
     const { content } = req.body ?? {};
     if (typeof content !== "string") {
       return res.status(400).json({ error: "content required (string)" });
@@ -529,51 +543,10 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
       return res.status(400).json({ error: `unknown agent(s) in 'to': ${unknown.join(", ")}` });
     }
 
-    // Resolve the conversation: explicit > latest open > DM auto-create > 409.
-    let conversationId = req.body?.conversation ?? null;
-    let conv = null;
-    if (conversationId) {
-      conv = store.getConversation(conversationId);
-      if (!conv || conv.channel !== channel) {
-        return res.status(404).json({ error: "conversation not found in this channel" });
-      }
-      if (conv.status !== "open") {
-        return res.status(400).json({ error: "conversation is closed" });
-      }
-    } else if (channel.startsWith("dm:")) {
-      conv = store.ensureDmConversation(channel);
-      conversationId = conv.id;
-    } else {
-      conv = store.latestOpenConversation(channel);
-      if (!conv) {
-        // Ergonomics: if the channel has never had a conversation, auto-create
-        // a "default" so the first message doesn't fail. After that the agent
-        // is expected to open conversations explicitly per task.
-        const existing = store.listConversations(channel);
-        if (existing.length === 0) {
-          conv = store.createConversation({
-            channel,
-            title: "default",
-            purpose: null,
-            successCriteria: null,
-            createdBy: agent.name,
-          });
-          broadcast({ type: "conversation.created", conversation: conv });
-        } else {
-          return res.status(409).json({
-            error: "no open conversation in this channel — POST /api/channels/:c/conversations first",
-          });
-        }
-      }
-      conversationId = conv.id;
-    }
-
     const data = req.body?.data ?? null;
-    // The conversation may have an active contract (DSP-style governance). If
-    // it does and the message didn't name a `contract` explicitly, apply the
-    // conv's contract. The relay then enforces presence of `data` and validates
-    // it against the contract's schema before queueing.
-    const convContract = conv?.contract_name ?? null;
+    // If the conversation has an active contract and the message didn't name one
+    // explicitly, apply the conv's contract — then enforce `data` + validate it.
+    const convContract = conv.contract_name ?? null;
     let contractName = req.body?.contract ?? convContract;
     let schema = req.body?.schema ?? null;
     if (convContract && !data) {
@@ -604,7 +577,7 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     }
 
     const msg = store.postMessage({
-      conversationId,
+      conversationId: conv.id,
       from: agent.name,
       content,
       to,
@@ -619,23 +592,6 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     res.json(msg);
   });
 
-  /* Deprecated routes (pre-v3 — messages and state doc lived on channels). */
-  api.get("/channels/:channel/messages", (_req, res) => {
-    res.status(410).json({
-      error: "deprecated: use GET /api/channels/:c/conversations then GET /api/conversations/:id/messages",
-    });
-  });
-  api.get("/channels/:channel/state", (_req, res) => {
-    res.status(410).json({
-      error: "deprecated: state docs moved to conversations. Use GET /api/conversations/:id/state",
-    });
-  });
-  api.put("/channels/:channel/state", (_req, res) => {
-    res.status(410).json({
-      error: "deprecated: state docs moved to conversations. Use PUT /api/conversations/:id/state",
-    });
-  });
-
   /* Inbox + wait (agent-only) — per-conversation. */
   api.get("/inbox", (req, res) => {
     const agent = requireAgent(req, res);
@@ -647,15 +603,14 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     const agent = requireAgent(req, res);
     if (!agent) return;
     const conversationId = req.query.conversation ? String(req.query.conversation) : null;
-    const channel = req.query.channel ? String(req.query.channel) : null;
     let timeoutMs = Number(req.query.timeout_ms ?? 25000);
     if (!Number.isFinite(timeoutMs)) timeoutMs = 25000;
     timeoutMs = Math.min(Math.max(timeoutMs, 1000), 60000);
-    if (channel) store.joinChannel(channel, agent.name);
+    // Watching a specific conversation auto-joins it (so it stays in your inbox).
+    if (conversationId) store.joinConversation(conversationId, agent.name);
     const messages = await store.waitForMessage({
       agent: agent.name,
       conversationId,
-      channel,
       timeoutMs,
     });
     if (messages.length) {
@@ -664,7 +619,6 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
       broadcast({
         type: "message.read",
         conversationId: m.conversationId,
-        channel: m.channel,
         agent: agent.name,
         at: Date.now(),
       });
@@ -715,6 +669,7 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
       needed: !config.isSetupComplete(),
       configDir: config.dir,
       mode: store.getMode(),
+      engine: config.getEngine(),
       locale: config.readConfig().locale ?? null,
       policy: config.readPolicy() ?? "",
       defaultPolicy: DEFAULT_POLICY,
@@ -725,9 +680,12 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
 
   api.post("/setup", (req, res) => {
     if (!config) return res.status(409).json({ error: "no config store" });
-    const { mode, policy, contracts } = req.body ?? {};
+    const { mode, policy, contracts, engine } = req.body ?? {};
     if (mode != null && !["manual", "auto", "llm"].includes(mode)) {
       return res.status(400).json({ error: "mode must be manual | auto | llm" });
+    }
+    if (engine != null && !VALID_ENGINES.has(engine)) {
+      return res.status(400).json({ error: `engine must be one of: ${[...VALID_ENGINES].join(", ")}` });
     }
     if (mode === "llm" && !reviewer?.available) {
       return res.status(409).json({
@@ -745,17 +703,34 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     if (typeof policy === "string") config.savePolicy(policy);
     for (const c of list) config.saveContract(c.name, c.schema);
     const appliedMode = mode ?? store.getMode();
+    const appliedEngine = engine ?? config.getEngine();
     store.setMode(appliedMode);
-    config.saveConfig({ mode: appliedMode, setupComplete: true });
+    config.saveConfig({ mode: appliedMode, engine: appliedEngine, setupComplete: true });
     reviewer?.setPolicy?.(config.readPolicy());
     broadcast({ type: "approval.mode", mode: appliedMode });
+    broadcast({ type: "engine.updated", engine: appliedEngine });
     broadcast({ type: "setup.updated", needed: false });
     res.json({
       needed: false,
       mode: appliedMode,
+      engine: appliedEngine,
       policy: config.readPolicy() ?? "",
       contracts: config.listContracts(),
     });
+  });
+
+  /* Engine = which agent CLI new environments launch (claude | opencode). The
+   * Settings UI edits it live; existing environments keep the engine they were
+   * created with. */
+  api.put("/engine", (req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    const engine = req.body?.engine;
+    if (!VALID_ENGINES.has(engine)) {
+      return res.status(400).json({ error: `engine must be one of: ${[...VALID_ENGINES].join(", ")}` });
+    }
+    config.saveConfig({ engine });
+    broadcast({ type: "engine.updated", engine });
+    res.json({ engine });
   });
 
   api.get("/contracts", (_req, res) => {
@@ -931,44 +906,23 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     res.json({ path: abs, parent: parent === abs ? null : parent, isRepo: existsSync(join(abs, ".git")), entries });
   });
 
-  /* ---- Projects: a directory + engine + agent identity switchboard can launch.
-   * The CLI runs in a PTY (see agents manager); its console streams over the
-   * /console WebSocket. Definitions persist in config; process state is live. */
+  /* ---- Projects (top-level): group one or more ENVIRONMENTS and own
+   * conversations. A project itself is just a name; its environments are the
+   * launchable agents. */
   api.get("/projects", (_req, res) => {
     if (!config) return res.json([]);
-    const list = config.readProjects().map((p) => ({ ...p, status: agents?.statusOf(p.id) ?? "stopped" }));
+    const list = config.readProjects().map((p) => ({
+      ...p,
+      environments: config.environmentsOfProject(p.id).map((e) => ({ ...e, status: agents?.statusOf(e.id) ?? "stopped" })),
+    }));
     res.json(list);
   });
 
-  api.post("/projects", async (req, res) => {
+  api.post("/projects", (req, res) => {
     if (!config) return res.status(409).json({ error: "no config store" });
-    const { mode = "existing", name, dir, parentDir, agentName, engine = "claude" } = req.body ?? {};
+    const { name } = req.body ?? {};
     try {
-      let projectDir, projectName;
-      if (mode === "new") {
-        if (!config.validName(name)) return res.status(400).json({ error: "name required (letters, digits, . _ -)" });
-        if (typeof parentDir !== "string" || !isAbsolute(parentDir.trim() || "")) {
-          return res.status(400).json({ error: "parentDir required (absolute path)" });
-        }
-        projectDir = join(parentDir.trim(), name);
-        if (existsSync(projectDir)) return res.status(400).json({ error: `already exists: ${projectDir}` });
-        mkdirSync(projectDir, { recursive: true });
-        await execFileAsync("git", ["-C", projectDir, "init"], { timeout: 15000 });
-        writeFileSync(join(projectDir, "README.md"), `# ${name}\n`);
-        projectName = name;
-      } else {
-        if (typeof dir !== "string" || !isAbsolute(dir.trim() || "")) {
-          return res.status(400).json({ error: "dir required (absolute path)" });
-        }
-        projectDir = dir.trim();
-        let st;
-        try { st = statSync(projectDir); } catch { return res.status(400).json({ error: `directory not found: ${projectDir}` }); }
-        if (!st.isDirectory()) return res.status(400).json({ error: `not a directory: ${projectDir}` });
-        projectName = config.validName(name) ? name : basename(projectDir);
-      }
-      const finalAgent = config.validName(agentName) ? agentName : projectName;
-      const project = config.addProject({ name: projectName, dir: projectDir, engine, agentName: finalAgent });
-      agents?.registerIdentity?.(project.agentName); // appears + addable to channels right away
+      const project = config.addProject({ name });
       broadcast({ type: "project.created", project });
       res.json(project);
     } catch (err) {
@@ -978,26 +932,89 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
 
   api.delete("/projects/:id", (req, res) => {
     if (!config) return res.status(409).json({ error: "no config store" });
-    agents?.stop(req.params.id);
+    // Stop any running agents of this project's environments before removing.
+    for (const e of config.environmentsOfProject(req.params.id)) agents?.stop(e.id);
     if (!config.removeProject(req.params.id)) return res.status(404).json({ error: "project not found" });
     broadcast({ type: "project.deleted", id: req.params.id });
     res.json({ ok: true });
   });
 
-  api.post("/projects/:id/agent/start", async (req, res) => {
-    if (!config || !agents) return res.status(409).json({ error: "projects unavailable" });
-    const project = config.getProject(req.params.id);
-    if (!project) return res.status(404).json({ error: "project not found" });
+  /* ---- Environments: a directory + engine + agent identity switchboard can
+   * launch, belonging to a project. The CLI runs in a PTY (see agents manager);
+   * its console streams over the /console WebSocket. */
+  api.get("/environments", (req, res) => {
+    if (!config) return res.json([]);
+    const projectId = req.query.project ? String(req.query.project) : null;
+    let list = config.readEnvironments();
+    if (projectId) list = list.filter((e) => e.projectId === projectId);
+    res.json(list.map((e) => ({ ...e, status: agents?.statusOf(e.id) ?? "stopped" })));
+  });
+
+  api.post("/environments", async (req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    const { mode = "existing", name, dir, parentDir, agentName, projectId } = req.body ?? {};
+    const engine = req.body?.engine ?? config.getEngine();
+    if (!VALID_ENGINES.has(engine)) {
+      return res.status(400).json({ error: `engine must be one of: ${[...VALID_ENGINES].join(", ")}` });
+    }
+    if (!projectId || !config.getProject(projectId)) {
+      return res.status(400).json({ error: "a valid projectId is required" });
+    }
     try {
-      await agents.start(project);
-      res.json({ projectId: project.id, status: agents.statusOf(project.id) });
+      let envDir, envName;
+      if (mode === "new") {
+        if (!config.validName(name)) return res.status(400).json({ error: "name required (letters, digits, . _ -)" });
+        if (typeof parentDir !== "string" || !isAbsolute(parentDir.trim() || "")) {
+          return res.status(400).json({ error: "parentDir required (absolute path)" });
+        }
+        envDir = join(parentDir.trim(), name);
+        if (existsSync(envDir)) return res.status(400).json({ error: `already exists: ${envDir}` });
+        mkdirSync(envDir, { recursive: true });
+        await execFileAsync("git", ["-C", envDir, "init"], { timeout: 15000 });
+        writeFileSync(join(envDir, "README.md"), `# ${name}\n`);
+        envName = name;
+      } else {
+        if (typeof dir !== "string" || !isAbsolute(dir.trim() || "")) {
+          return res.status(400).json({ error: "dir required (absolute path)" });
+        }
+        envDir = dir.trim();
+        let st;
+        try { st = statSync(envDir); } catch { return res.status(400).json({ error: `directory not found: ${envDir}` }); }
+        if (!st.isDirectory()) return res.status(400).json({ error: `not a directory: ${envDir}` });
+        envName = config.validName(name) ? name : basename(envDir);
+      }
+      const finalAgent = config.validName(agentName) ? agentName : envName;
+      const env = config.addEnvironment({ name: envName, dir: envDir, engine, agentName: finalAgent, projectId });
+      agents?.registerIdentity?.(env.agentName); // appears + addable to conversations right away
+      broadcast({ type: "environment.created", environment: env });
+      res.json(env);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  api.delete("/environments/:id", (req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    agents?.stop(req.params.id);
+    if (!config.removeEnvironment(req.params.id)) return res.status(404).json({ error: "environment not found" });
+    broadcast({ type: "environment.deleted", id: req.params.id });
+    res.json({ ok: true });
+  });
+
+  api.post("/environments/:id/agent/start", async (req, res) => {
+    if (!config || !agents) return res.status(409).json({ error: "environments unavailable" });
+    const env = config.getEnvironment(req.params.id);
+    if (!env) return res.status(404).json({ error: "environment not found" });
+    try {
+      await agents.start(env);
+      res.json({ environmentId: env.id, status: agents.statusOf(env.id) });
     } catch (err) {
       res.status(502).json({ error: err.message });
     }
   });
 
-  api.post("/projects/:id/agent/stop", (req, res) => {
-    if (!agents) return res.status(409).json({ error: "projects unavailable" });
+  api.post("/environments/:id/agent/stop", (req, res) => {
+    if (!agents) return res.status(409).json({ error: "environments unavailable" });
     const ok = agents.stop(req.params.id);
     res.json({ ok, status: agents.statusOf(req.params.id) });
   });

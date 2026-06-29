@@ -4,15 +4,20 @@
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.5); /* slate-900/50 */
+  background: rgba(15, 23, 42, 0.55); /* slate-900/55 */
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 40px 16px;
+  padding: 48px 16px;
   overflow-y: auto;
   z-index: 50;
+  animation: sb-fade 0.12s ease-out;
 }
 .overlay[hidden] { display: none; }
+@keyframes sb-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sb-pop { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: none; } }
 
 /* Live agent console (xterm.js). Docked over the center column (not a modal):
  * fills #feed so the left/right sidebars stay visible while you watch the agent.
@@ -58,14 +63,17 @@
 .panel {
   background: #ffffff;
   border: 1px solid #e2e8f0; /* slate-200 */
-  border-radius: 10px;
+  border-radius: 14px;
   width: 100%;
   max-width: 720px;
-  padding: 24px 28px 20px;
-  box-shadow: 0 20px 60px rgba(15, 23, 42, 0.25);
+  padding: 24px 28px 22px;
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.28);
   color: #334155; /* slate-700 */
   font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  animation: sb-pop 0.16s cubic-bezier(0.16, 1, 0.3, 1);
 }
+/* Compact variant for small single-field modals (e.g. new project). */
+.panel.panel-sm { max-width: 440px; }
 .panel h2 { margin: 0 0 4px 0; font-size: 20px; color: #0f172a; }
 .panel .sub { color: #64748b; font-size: 13px; margin: 0 0 18px 0; }
 
@@ -274,7 +282,9 @@
 .dark .field input[type="password"],
 .dark .field textarea,
 .dark .field select {
-  background: #0f172a; /* slate-900 */
+  /* background-color (not the `background` shorthand): the shorthand would reset
+   * background-repeat/position/size and make the chevron tile across the select. */
+  background-color: #0f172a; /* slate-900 */
   color: #f1f5f9;
   border-color: #475569; /* slate-600 */
 }
@@ -327,3 +337,238 @@
 
 .dark .settings-section { border-color: #334155; }
 .dark .settings-section h3 { color: #f1f5f9; }
+
+/* ============================================================================
+ * opencode skin — anomalyco/opencode design tokens, used as-is
+ * A full re-theme onto opencode's palette: near-monochrome grays for every
+ * surface (header, sidebars, feed, cards, modals), near-black/near-white primary
+ * buttons, and opencode's vivid BLUE (#034cff) reserved for focus + selection
+ * (the rest stays monochrome, exactly like opencode). Critical = #fc543a.
+ * Tokens flip by mode; layered last to override tailwind.css + the rules above.
+ * ========================================================================== */
+:root {
+  --background: #f8f8f8;        /* opencode background-base (page) */
+  --foreground: #171717;        /* text-strong */
+  --card: #ffffff;              /* surface-strong (cards/header) */
+  --card-foreground: #171717;
+  --primary: #171717;           /* button-primary-base (near-black) */
+  --primary-foreground: #ffffff;
+  --primary-hover: #151313;     /* icon-strong-hover */
+  --secondary: #ededed;         /* chips/badges */
+  --muted: #f3f3f3;             /* background-weak */
+  --muted-foreground: #6f6f6f;  /* text-base */
+  --accent: #f0f0f0;            /* subtle hover surface */
+  --destructive: #fc543a;       /* opencode critical */
+  --border: #e5e5e5;            /* border-weak-base */
+  --ring: #a3a3a3;              /* neutral focus ring (monochrome, like the template) */
+  --sidebar: #fcfcfc;           /* background-strong */
+  --radius: 0.5rem;
+}
+.dark {
+  --background: #101010;        /* opencode dark background-base */
+  --foreground: #ededed;        /* gray-dark-12 / text-strong */
+  --card: #1c1c1c;              /* gray-dark-2 (cards/header) */
+  --card-foreground: #ededed;
+  --primary: #ededed;           /* button-primary-base (inverts light) */
+  --primary-foreground: #161616;
+  --primary-hover: #f6f3f3;
+  --secondary: #2a2a2a;
+  --muted: #1e1e1e;             /* background-weak */
+  --muted-foreground: #a0a0a0;  /* text-base */
+  --accent: #262626;            /* subtle hover surface */
+  --destructive: #fc543a;
+  --border: rgba(255, 255, 255, 0.12);
+  --ring: #707070;              /* neutral focus ring (monochrome, like the template) */
+  --sidebar: #161616;           /* gray-dark-1 (between page and card) */
+}
+
+/* shadcn-soft corners (tailwind `.rounded` 4px → ~8px). */
+.rounded { border-radius: calc(var(--radius) - 2px); }
+.rounded-r { border-top-right-radius: calc(var(--radius) - 2px); border-bottom-right-radius: calc(var(--radius) - 2px); }
+
+/* ---- surfaces: backgrounds ---- */
+.bg-white { background-color: var(--card) !important; }
+.bg-slate-50 { background-color: var(--background) !important; }
+.bg-slate-100 { background-color: var(--muted) !important; }
+.bg-slate-200, .bg-slate-300 { background-color: var(--secondary) !important; }
+.dark .dark\:bg-slate-900 { background-color: var(--background) !important; }
+.dark .dark\:bg-slate-800 { background-color: var(--card) !important; }
+.dark .dark\:bg-slate-700, .dark .dark\:bg-slate-700\/50, .dark .dark\:bg-slate-600 { background-color: var(--secondary) !important; }
+/* the two sidebars read as the shadcn sidebar surface */
+#col-left, #col-conversations { background-color: var(--sidebar) !important; }
+
+/* hovers */
+.hover\:bg-slate-50:hover, .hover\:bg-slate-100:hover, .hover\:bg-slate-200:hover { background-color: var(--accent) !important; }
+.dark .dark\:hover\:bg-slate-700:hover, .dark .dark\:hover\:bg-slate-700\/40:hover { background-color: var(--accent) !important; }
+
+/* ---- borders ---- */
+.border-slate-200, .border-slate-300 { border-color: var(--border) !important; }
+.dark .dark\:border-slate-700, .dark .dark\:border-slate-600 { border-color: var(--border) !important; }
+
+/* ---- text ---- */
+.text-slate-900, .text-slate-700 { color: var(--foreground) !important; }
+.text-slate-600, .text-slate-500, .text-slate-400 { color: var(--muted-foreground) !important; }
+.dark .dark\:text-slate-100, .dark .dark\:text-slate-200 { color: var(--foreground) !important; }
+.dark .dark\:text-slate-300, .dark .dark\:text-slate-400 { color: var(--muted-foreground) !important; }
+
+/* ---- primary accent: blue → neutral primary (inverts in dark) ---- */
+.bg-blue-500, .bg-blue-600 { background-color: var(--primary) !important; color: var(--primary-foreground) !important; }
+.hover\:bg-blue-500:hover, .hover\:bg-blue-600:hover { background-color: var(--primary-hover) !important; color: var(--primary-foreground) !important; }
+.bg-blue-50 { background-color: var(--accent) !important; }
+.dark .dark\:bg-blue-900\/30 { background-color: var(--accent) !important; }
+.text-blue-600, .text-blue-700 { color: var(--foreground) !important; }
+.dark .dark\:text-blue-300, .dark .dark\:text-blue-400 { color: var(--foreground) !important; }
+.hover\:text-blue-600:hover { color: var(--foreground) !important; }
+.border-blue-500, .hover\:border-blue-500:hover { border-color: var(--ring) !important; }
+
+/* ---- modal / card ---- */
+.panel {
+  background: var(--card) !important;
+  border-color: var(--border) !important;
+  color: var(--card-foreground) !important;
+  border-radius: var(--radius) !important;
+  box-shadow: 0 16px 48px -12px rgba(0, 0, 0, 0.30), 0 4px 12px -6px rgba(0, 0, 0, 0.12) !important;
+}
+.panel h2, .step-title { color: var(--foreground) !important; }
+.panel .sub, .empty-note { color: var(--muted-foreground) !important; }
+.panel-footer { border-color: var(--border) !important; }
+
+/* ---- buttons (shadcn) ---- */
+.btn {
+  background: var(--card) !important;
+  color: var(--foreground) !important;
+  border-color: var(--border) !important;
+  border-radius: calc(var(--radius) - 2px) !important;
+}
+.btn:hover { background: var(--accent) !important; color: var(--foreground) !important; border-color: var(--border) !important; }
+.btn-primary { background: var(--primary) !important; color: var(--primary-foreground) !important; border-color: var(--primary) !important; }
+.btn-primary:hover { background: var(--primary-hover) !important; color: var(--primary-foreground) !important; border-color: var(--primary-hover) !important; }
+.btn-danger { background: var(--card) !important; color: var(--destructive) !important; border-color: var(--border) !important; }
+.btn-danger:hover { background: var(--destructive) !important; color: #fff !important; border-color: var(--destructive) !important; }
+.btn:disabled { opacity: 0.5; }
+
+/* ---- inputs / selects / textarea ---- */
+.field > label { color: var(--muted-foreground) !important; }
+.field input[type="text"], .field input[type="password"], .field textarea, .field select {
+  background-color: var(--card) !important;
+  color: var(--foreground) !important;
+  border-color: var(--border) !important;
+  border-radius: calc(var(--radius) - 2px) !important;
+}
+.field input::placeholder, .field textarea::placeholder { color: var(--muted-foreground) !important; }
+.field input[type="text"]:focus, .field input[type="password"]:focus, .field textarea:focus, .field select:focus {
+  border-color: var(--ring) !important;
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ring) 40%, transparent) !important;
+}
+.field select:disabled { background-color: var(--muted) !important; }
+
+/* ---- mode options + contract list (cards) ---- */
+.mode-option, .contract-list li { background: var(--card) !important; border-color: var(--border) !important; border-radius: calc(var(--radius) - 2px) !important; }
+.mode-option:hover { border-color: var(--ring) !important; }
+.mode-option.selected { border-color: var(--foreground) !important; background: var(--accent) !important; }
+.mode-option .mo-name { color: var(--foreground) !important; }
+.mode-option .mo-desc { color: var(--muted-foreground) !important; }
+
+/* ---- settings nav + sections ---- */
+.settings-nav { border-color: var(--border) !important; }
+.settings-nav button { color: var(--muted-foreground) !important; }
+.settings-nav button:hover { background: var(--accent) !important; color: var(--foreground) !important; }
+.settings-nav button.active { background: var(--accent) !important; color: var(--foreground) !important; font-weight: 600; }
+.settings-section { border-color: var(--border) !important; }
+.settings-section h3 { color: var(--foreground) !important; }
+
+/* ---- file browser ---- */
+.fs-browser, .fs-head { border-color: var(--border) !important; }
+.fs-head { background: var(--muted) !important; }
+.fs-row { color: var(--foreground) !important; }
+.fs-row:hover { background: var(--accent) !important; color: var(--foreground) !important; }
+.fs-path { color: var(--muted-foreground) !important; }
+
+/* ---- wizard steps ---- */
+.steps .step { background: var(--secondary) !important; }
+.steps .step.active { background: var(--primary) !important; }
+.steps .step.done { background: var(--foreground) !important; }
+
+/* ---- selected conversation item (shadcn sidebar-accent selection) ---- */
+.sb-active { background: var(--accent) !important; color: var(--foreground) !important; font-weight: 600; box-shadow: inset 2px 0 0 0 var(--foreground); }
+
+/* ---- typography: opencode's Inter (sans) + JetBrains Mono Nerd Font (mono) ---- */
+@font-face {
+  font-family: "Inter";
+  src: url("vendor/fonts/Inter.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrainsMono Nerd Font Mono";
+  src: url("vendor/fonts/JetBrainsMonoNerdFontMono-Regular.woff2") format("woff2");
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+:root {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrainsMono Nerd Font Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+}
+body, .font-sans { font-family: var(--font-sans) !important; }
+.font-mono { font-family: var(--font-mono) !important; }
+.panel { font-family: var(--font-sans) !important; }
+.field input[type="text"], .field input[type="password"], .field textarea { font-family: var(--font-mono) !important; }
+.field select, .field > label { font-family: var(--font-sans) !important; }
+.console-bar, .console-term { font-family: var(--font-mono) !important; }
+
+/* ---- selects/dropdowns: opencode chevron-down on EVERY select (square caps) ---- */
+select {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%236f6f6f' stroke-width='1.25' stroke-linecap='square'%3E%3Cpath d='M6.6665 8.33325L9.99984 11.6666L13.3332 8.33325'/%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 7px center !important;
+  background-size: 16px 16px !important;
+  padding-right: 26px !important;
+}
+.dark select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='none' stroke='%23a0a0a0' stroke-width='1.25' stroke-linecap='square'%3E%3Cpath d='M6.6665 8.33325L9.99984 11.6666L13.3332 8.33325'/%3E%3C/svg%3E") !important;
+}
+
+/* ---- opencode inline icons (svg) ---- */
+.oc-ico { display: inline-block; vertical-align: -0.15em; flex: none; }
+button .oc-ico { pointer-events: none; }
+
+/* ---- rendered Markdown (master analysis output) ----
+   Tailwind's preflight strips list markers + margins, so restore them here. */
+.md-body { line-height: 1.5; word-break: break-word; }
+.md-body > :first-child { margin-top: 0; }
+.md-body > :last-child { margin-bottom: 0; }
+.md-h { font-weight: 700; line-height: 1.3; margin: 0.7em 0 0.3em; }
+h1.md-h { font-size: 1.18em; }
+h2.md-h { font-size: 1.1em; }
+h3.md-h { font-size: 1.02em; }
+h4.md-h, h5.md-h, h6.md-h { font-size: 1em; }
+.md-p { margin: 0.4em 0; }
+.md-ul, .md-ol { margin: 0.35em 0; padding-left: 1.4em; }
+.md-ul { list-style: disc; }
+.md-ol { list-style: decimal; }
+.md-ul .md-ul { list-style: circle; }
+.md-body li { margin: 0.15em 0; }
+.md-body strong { font-weight: 700; }
+.md-body em { font-style: italic; }
+.md-code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.05em 0.35em;
+}
+.md-pre {
+  margin: 0.5em 0;
+  padding: 0.6em 0.8em;
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.md-pre code { font-family: var(--font-mono); font-size: 0.88em; white-space: pre; background: none; border: 0; padding: 0; }
+.md-body a { color: var(--foreground); text-decoration: underline; }

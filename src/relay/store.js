@@ -5,11 +5,13 @@
  * Same closure-factory shape — routes/MCP talk to it through the documented
  * methods only.
  *
- * Persisted (schema v3):
- *   - agents (+tokens), channels, channel_members
- *   - conversations (threads within a channel; own state doc + own message
- *     stream; optional `contract_name` for DSP-style governance)
- *   - messages (keyed by conversation_id; channel kept for lookup)
+ * Persisted (schema v4 — conversations-only):
+ *   - agents (+tokens)
+ *   - conversations (the room itself: own members, own state doc, own message
+ *     stream, optional `contract_name` for DSP-style governance, optional
+ *     `dm_key` that makes a conversation a canonical 1:1 between two agents)
+ *   - conversation_members (who belongs to a conversation)
+ *   - messages (keyed by conversation_id)
  *   - read_cursors (per-agent, per-conversation)
  *   - conversation_state (the "PROGRESS.md" of each loop)
  *
@@ -17,7 +19,9 @@
  * supervision `mode` (which itself persists via config.js, restored on boot).
  *
  * Migration: PRAGMA user_version is the schema gate. Migrations are stacked
- * forward; old DBs walk v0/v1 → v2 → v3 in one boot, idempotent on reopen.
+ * forward; old DBs walk v0/v1 → v2 → v3 → v4 in one boot, idempotent on reopen.
+ * v3 → v4 collapses channels into conversations (each conversation inherits its
+ * channel's members; DM channels become a `dm_key` on their conversation).
  */
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
@@ -25,7 +29,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DEFAULT_CONFIG_DIR } from "./config.js";
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 5;
 
 /* The PROGRESS.md skeleton seeded into every new conversation's state doc so it's
  * never blank: agents update this structure instead of facing an empty doc. */
@@ -53,12 +57,27 @@ export function initialStateDoc({ title, purpose, successCriteria } = {}) {
   ].join("\n");
 }
 
+/** The canonical 1:1 key for a pair of agents (order-independent). */
+export function dmKeyFor(a, b) {
+  return [a, b].sort().join("+");
+}
+
 export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db") } = {}) {
   if (dbPath !== ":memory:") mkdirSync(dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
   db.exec("PRAGMA journal_mode = WAL;");
 
   ensureSchema(db);
+
+  // Self-heal: guarantee newer nullable columns exist even if a prior boot bumped
+  // user_version without adding them (e.g. a dev migration interrupted mid-edit).
+  {
+    const convCols = db.prepare("PRAGMA table_info(conversations)").all().map((c) => c.name);
+    if (!convCols.includes("project_id")) {
+      db.exec("ALTER TABLE conversations ADD COLUMN project_id TEXT");
+      db.exec("CREATE INDEX IF NOT EXISTS idx_conversations_project ON conversations (project_id)");
+    }
+  }
 
   /* Prepared statements */
   const q = {
@@ -69,43 +88,35 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
     touchAgent: db.prepare("UPDATE agents SET lastSeenAt = ? WHERE name = ?"),
     allAgents: db.prepare("SELECT name, registeredAt, lastSeenAt FROM agents"),
 
-    /* channels + membership */
-    insChannel: db.prepare("INSERT OR IGNORE INTO channels(name, createdAt) VALUES(?, ?)"),
-    hasChannel: db.prepare("SELECT 1 FROM channels WHERE name = ?"),
-    delChannel: db.prepare("DELETE FROM channels WHERE name = ?"),
-    allChannels: db.prepare("SELECT name FROM channels"),
+    /* conversation membership */
+    insMember: db.prepare("INSERT OR IGNORE INTO conversation_members(conversation_id, agent) VALUES(?, ?)"),
+    delMember: db.prepare("DELETE FROM conversation_members WHERE conversation_id = ? AND agent = ?"),
+    membersOf: db.prepare("SELECT agent FROM conversation_members WHERE conversation_id = ? ORDER BY agent"),
+    memberConvs: db.prepare("SELECT conversation_id FROM conversation_members WHERE agent = ?"),
+    isMember: db.prepare("SELECT 1 FROM conversation_members WHERE conversation_id = ? AND agent = ?"),
+    delMembersOfConv: db.prepare("DELETE FROM conversation_members WHERE conversation_id = ?"),
 
-    insMember: db.prepare("INSERT OR IGNORE INTO channel_members(channel, agent) VALUES(?, ?)"),
-    delMember: db.prepare("DELETE FROM channel_members WHERE channel = ? AND agent = ?"),
-    membersOf: db.prepare("SELECT agent FROM channel_members WHERE channel = ? ORDER BY agent"),
-    memberChannels: db.prepare("SELECT channel FROM channel_members WHERE agent = ?"),
-    isMember: db.prepare("SELECT 1 FROM channel_members WHERE channel = ? AND agent = ?"),
-    delMembersOfChannel: db.prepare("DELETE FROM channel_members WHERE channel = ?"),
-
-    /* conversations */
+    /* conversations (the room) */
     insConv: db.prepare(`INSERT INTO conversations
-      (id, channel, title, purpose, successCriteria, contract_name, status, createdAt, createdBy)
-      VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)`),
+      (id, title, purpose, successCriteria, contract_name, dm_key, project_id, status, createdAt, createdBy)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`),
     convById: db.prepare("SELECT * FROM conversations WHERE id = ?"),
-    convsByChannel: db.prepare(
-      "SELECT * FROM conversations WHERE channel = ? ORDER BY createdAt DESC"
-    ),
-    convsByChannelStatus: db.prepare(
-      "SELECT * FROM conversations WHERE channel = ? AND status = ? ORDER BY createdAt DESC"
-    ),
-    latestOpenConv: db.prepare(
-      "SELECT * FROM conversations WHERE channel = ? AND status = 'open' ORDER BY createdAt DESC LIMIT 1"
-    ),
+    allConvs: db.prepare("SELECT * FROM conversations ORDER BY createdAt DESC"),
+    allConvsByStatus: db.prepare("SELECT * FROM conversations WHERE status = ? ORDER BY createdAt DESC"),
+    convByDmKey: db.prepare("SELECT * FROM conversations WHERE dm_key = ? ORDER BY createdAt DESC LIMIT 1"),
     closeConv: db.prepare(
       "UPDATE conversations SET status = 'closed', closedAt = ?, closedBy = ?, closedOutcome = ? WHERE id = ?"
     ),
+    reopenConv: db.prepare(
+      "UPDATE conversations SET status = 'open', closedAt = NULL, closedBy = NULL, closedOutcome = NULL WHERE id = ?"
+    ),
     updConvContract: db.prepare("UPDATE conversations SET contract_name = ? WHERE id = ?"),
-    delConvsOfChannel: db.prepare("DELETE FROM conversations WHERE channel = ?"),
+    delConv: db.prepare("DELETE FROM conversations WHERE id = ?"),
 
     /* messages (keyed by conversation_id) */
     insMsg: db.prepare(`INSERT INTO messages
-      (id, conversation_id, channel, from_agent, content, to_json, data_json, schema_json, contract, createdAt, status, review_json, approvedAt, rejectedAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+      (id, conversation_id, from_agent, content, to_json, data_json, schema_json, contract, createdAt, status, review_json, approvedAt, rejectedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
     msgById: db.prepare("SELECT * FROM messages WHERE id = ?"),
     updApprove: db.prepare("UPDATE messages SET status = 'delivered', approvedAt = ?, review_json = ? WHERE id = ?"),
     updReject: db.prepare("UPDATE messages SET status = 'rejected', rejectedAt = ?, review_json = ? WHERE id = ?"),
@@ -119,11 +130,7 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
     countDeliveredConv: db.prepare(
       "SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ? AND status = 'delivered'"
     ),
-    countDeliveredChannel: db.prepare(
-      "SELECT COUNT(*) AS n FROM messages WHERE channel = ? AND status = 'delivered'"
-    ),
     pending: db.prepare("SELECT * FROM messages WHERE status = 'pending' ORDER BY createdAt"),
-    delMsgsOfChannel: db.prepare("DELETE FROM messages WHERE channel = ?"),
     delMsgsOfConv: db.prepare("DELETE FROM messages WHERE conversation_id = ?"),
 
     /* read cursors (per-agent, per-conversation) */
@@ -131,9 +138,6 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
     setCursor: db.prepare(`INSERT INTO read_cursors(agent, conversation_id, lastReadAt) VALUES(?, ?, ?)
       ON CONFLICT(agent, conversation_id) DO UPDATE SET lastReadAt = excluded.lastReadAt`),
     delCursorsOfConv: db.prepare("DELETE FROM read_cursors WHERE conversation_id = ?"),
-    delCursorsOfChannel: db.prepare(
-      "DELETE FROM read_cursors WHERE conversation_id IN (SELECT id FROM conversations WHERE channel = ?)"
-    ),
 
     /* conversation state doc */
     getState: db.prepare(
@@ -143,9 +147,6 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
       VALUES(?, ?, ?, ?)
       ON CONFLICT(conversation_id) DO UPDATE SET content = excluded.content, updatedAt = excluded.updatedAt, updatedBy = excluded.updatedBy`),
     delStateOfConv: db.prepare("DELETE FROM conversation_state WHERE conversation_id = ?"),
-    delStateOfChannel: db.prepare(
-      "DELETE FROM conversation_state WHERE conversation_id IN (SELECT id FROM conversations WHERE channel = ?)"
-    ),
   };
 
   /** Long-poll waiters for agent_wait (in-memory; transient). */
@@ -159,7 +160,6 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
     const msg = {
       id: r.id,
       conversationId: r.conversation_id,
-      channel: r.channel,
       from: r.from_agent,
       content: r.content,
       to: r.to_json ? JSON.parse(r.to_json) : [],
@@ -179,11 +179,13 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
     if (!r) return null;
     const c = {
       id: r.id,
-      channel: r.channel,
       title: r.title,
       purpose: r.purpose ?? null,
       successCriteria: r.successCriteria ?? null,
       contract_name: r.contract_name ?? null,
+      dmKey: r.dm_key ?? null,
+      isDm: Boolean(r.dm_key),
+      projectId: r.project_id ?? null,
       status: r.status,
       createdAt: r.createdAt,
       createdBy: r.createdBy,
@@ -196,16 +198,22 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
     return c;
   }
 
-  function publicChannel(name) {
-    return {
-      name,
-      members: q.membersOf.all(name).map((r) => r.agent),
-      messageCount: q.countDeliveredChannel.get(name).n,
-    };
+  /** A conversation enriched with its members + delivered message count — the
+   *  shape every public method returns so the UI/MCP always see members. */
+  function publicConversation(row) {
+    if (!row) return null;
+    const c = rowToConversation(row);
+    c.members = q.membersOf.all(row.id).map((r) => r.agent);
+    c.messageCount = q.countDeliveredConv.get(row.id).n;
+    return c;
   }
 
-  function ensureChannel(name) {
-    q.insChannel.run(name, Date.now());
+  /** Add an agent to a conversation, but never the "master" supervisor sentinel
+   *  (no token, not a persistent member) nor unknown names. */
+  function addMember(conversationId, agent) {
+    if (!agent || agent === "master") return;
+    if (!q.agentByName.get(agent)) return;
+    q.insMember.run(conversationId, agent);
   }
 
   function unreadFor(agent, conversationId) {
@@ -217,27 +225,25 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
     const items = [];
     let total = 0;
     let mentioned = 0;
-    for (const { channel } of q.memberChannels.all(agent)) {
-      const openConvs = q.convsByChannelStatus.all(channel, "open");
-      for (const cRow of openConvs) {
-        const unread = unreadFor(agent, cRow.id);
-        if (unread.length === 0) continue;
-        const mine = unread.filter((m) => m.to.includes(agent)).length;
-        const last = unread[unread.length - 1];
-        items.push({
-          channel,
-          conversationId: cRow.id,
-          conversationTitle: cRow.title,
-          unread: unread.length,
-          mentioned: mine,
-          lastFrom: last.from,
-          lastPreview: last.content.length > 80 ? last.content.slice(0, 80) + "…" : last.content,
-        });
-        total += unread.length;
-        mentioned += mine;
-      }
+    for (const { conversation_id } of q.memberConvs.all(agent)) {
+      const row = q.convById.get(conversation_id);
+      if (!row || row.status !== "open") continue;
+      const unread = unreadFor(agent, conversation_id);
+      if (unread.length === 0) continue;
+      const mine = unread.filter((m) => m.to.includes(agent)).length;
+      const last = unread[unread.length - 1];
+      items.push({
+        conversationId: row.id,
+        conversationTitle: row.title,
+        unread: unread.length,
+        mentioned: mine,
+        lastFrom: last.from,
+        lastPreview: last.content.length > 80 ? last.content.slice(0, 80) + "…" : last.content,
+      });
+      total += unread.length;
+      mentioned += mine;
     }
-    return { total, mentioned, channels: items };
+    return { total, mentioned, conversations: items };
   }
 
   /** Resolve any waiter that matches a freshly delivered message. */
@@ -246,9 +252,7 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
       if (msg.from === w.agent) continue;
       if (w.conversationId) {
         if (w.conversationId !== msg.conversationId) continue;
-      } else if (w.channel) {
-        if (w.channel !== msg.channel) continue;
-      } else if (!q.isMember.get(msg.channel, w.agent)) {
+      } else if (!q.isMember.get(msg.conversationId, w.agent)) {
         continue;
       }
       waiters.delete(w);
@@ -257,17 +261,23 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
     }
   }
 
-  function ensureDefaultDmConversation(channel) {
-    if (!channel.startsWith("dm:")) return null;
-    const open = q.latestOpenConv.get(channel);
-    if (open) return rowToConversation(open);
+  function createConversationRow({
+    title,
+    purpose = null,
+    successCriteria = null,
+    contractName = null,
+    dmKey = null,
+    projectId = null,
+    createdBy,
+    members = [],
+  }) {
     const id = randomUUID();
     const now = Date.now();
-    const parts = channel.slice(3).split("+");
-    const purpose = parts.length === 2 ? `1:1 between ${parts[0]} and ${parts[1]}` : null;
-    q.insConv.run(id, channel, "direct", purpose, null, null, now, "system");
-    q.setState.run(id, initialStateDoc({ title: "direct", purpose }), now, "system");
-    return rowToConversation(q.convById.get(id));
+    q.insConv.run(id, title, purpose, successCriteria, contractName, dmKey, projectId, now, createdBy ?? "system");
+    q.setState.run(id, initialStateDoc({ title, purpose, successCriteria }), now, createdBy ?? "system");
+    addMember(id, createdBy);
+    for (const m of members) addMember(id, m);
+    return publicConversation(q.convById.get(id));
   }
 
   // One-time backfill: older conversations (created before state-doc seeding, or
@@ -320,44 +330,85 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
       q.touchAgent.run(Date.now(), name);
     },
 
-    /* channels + membership */
-    joinChannel(name, agent) {
-      ensureChannel(name);
-      q.insMember.run(name, agent);
-      return publicChannel(name);
+    /* conversations (the room) + membership */
+    createConversation({
+      title,
+      purpose = null,
+      successCriteria = null,
+      contractName = null,
+      projectId = null,
+      createdBy,
+      members = [],
+    }) {
+      return createConversationRow({ title, purpose, successCriteria, contractName, projectId, createdBy, members });
     },
-    leaveChannel(name, agent) {
-      if (!q.hasChannel.get(name)) return null;
-      q.delMember.run(name, agent);
-      return publicChannel(name);
+    getConversation(id) {
+      return publicConversation(q.convById.get(id));
     },
-    listChannels() {
-      return q.allChannels.all().map((r) => publicChannel(r.name));
+    listConversations(status = null) {
+      const rows = status ? q.allConvsByStatus.all(status) : q.allConvs.all();
+      return rows.map(publicConversation);
     },
-    channelMembers(name) {
-      if (!q.hasChannel.get(name)) return [];
-      return q.membersOf.all(name).map((r) => r.agent);
+    closeConversation(id, { closedBy, outcome = null } = {}) {
+      const row = q.convById.get(id);
+      if (!row || row.status !== "open") return null;
+      q.closeConv.run(Date.now(), closedBy ?? "system", outcome, id);
+      return publicConversation(q.convById.get(id));
     },
-    dmChannelName(a, b) {
-      return "dm:" + [a, b].sort().join("+");
+    /** Set or clear the active named contract on a conversation. */
+    setConversationContract(id, contractName) {
+      const row = q.convById.get(id);
+      if (!row) return null;
+      q.updConvContract.run(contractName ?? null, id);
+      return publicConversation(q.convById.get(id));
     },
-    createChannel(name) {
-      ensureChannel(name);
-      return publicChannel(name);
+    joinConversation(id, agent) {
+      const row = q.convById.get(id);
+      if (!row) return null;
+      addMember(id, agent);
+      return publicConversation(q.convById.get(id));
     },
-    /** Delete a whole channel and everything keyed on it: conversations + their
-     *  state docs + messages + members + cursors. Channel-bound waiters resolve
-     *  empty so their long-polls don't leak. Returns false if it didn't exist. */
-    deleteChannel(name) {
-      if (!q.hasChannel.get(name)) return false;
-      q.delCursorsOfChannel.run(name);
-      q.delStateOfChannel.run(name);
-      q.delMsgsOfChannel.run(name);
-      q.delConvsOfChannel.run(name);
-      q.delMembersOfChannel.run(name);
-      q.delChannel.run(name);
+    leaveConversation(id, agent) {
+      const row = q.convById.get(id);
+      if (!row) return null;
+      q.delMember.run(id, agent);
+      return publicConversation(q.convById.get(id));
+    },
+    conversationMembers(id) {
+      if (!q.convById.get(id)) return [];
+      return q.membersOf.all(id).map((r) => r.agent);
+    },
+    /** The canonical 1:1 conversation for a pair — created on first DM, kept
+     *  forever (reopened if it had been closed), both agents auto-joined. */
+    ensureDmConversation(a, b) {
+      const key = dmKeyFor(a, b);
+      const existing = q.convByDmKey.get(key);
+      if (existing) {
+        if (existing.status !== "open") q.reopenConv.run(existing.id);
+        addMember(existing.id, a);
+        addMember(existing.id, b);
+        return publicConversation(q.convById.get(existing.id));
+      }
+      return createConversationRow({
+        title: `${a} ↔ ${b}`,
+        purpose: `1:1 between ${a} and ${b}`,
+        dmKey: key,
+        createdBy: a,
+        members: [a, b],
+      });
+    },
+    /** Delete a conversation and everything keyed on it: state doc, messages,
+     *  members, cursors. Waiters scoped to it resolve empty so long-polls don't
+     *  leak. Returns false if it didn't exist. */
+    deleteConversation(id) {
+      if (!q.convById.get(id)) return false;
+      q.delCursorsOfConv.run(id);
+      q.delStateOfConv.run(id);
+      q.delMsgsOfConv.run(id);
+      q.delMembersOfConv.run(id);
+      q.delConv.run(id);
       for (const w of [...waiters]) {
-        if (w.channel !== name) continue;
+        if (w.conversationId !== id) continue;
         clearTimeout(w.timer);
         waiters.delete(w);
         w.resolve([]);
@@ -365,63 +416,14 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
       return true;
     },
 
-    /* conversations (threads inside a channel) */
-    createConversation({
-      channel,
-      title,
-      purpose = null,
-      successCriteria = null,
-      contractName = null,
-      createdBy,
-    }) {
-      ensureChannel(channel);
-      const id = randomUUID();
-      const now = Date.now();
-      q.insConv.run(id, channel, title, purpose, successCriteria, contractName, now, createdBy);
-      q.setState.run(id, initialStateDoc({ title, purpose, successCriteria }), now, createdBy ?? "system");
-      return rowToConversation(q.convById.get(id));
-    },
-    getConversation(id) {
-      return rowToConversation(q.convById.get(id));
-    },
-    listConversations(channel, status = null) {
-      const rows = status
-        ? q.convsByChannelStatus.all(channel, status)
-        : q.convsByChannel.all(channel);
-      return rows.map(rowToConversation);
-    },
-    closeConversation(id, { closedBy, outcome = null } = {}) {
-      const row = q.convById.get(id);
-      if (!row || row.status !== "open") return null;
-      q.closeConv.run(Date.now(), closedBy ?? "system", outcome, id);
-      return rowToConversation(q.convById.get(id));
-    },
-    /** Set or clear the active named contract on a conversation. */
-    setConversationContract(id, contractName) {
-      const row = q.convById.get(id);
-      if (!row) return null;
-      q.updConvContract.run(contractName ?? null, id);
-      return rowToConversation(q.convById.get(id));
-    },
-    latestOpenConversation(channel) {
-      const row = q.latestOpenConv.get(channel);
-      return row ? rowToConversation(row) : null;
-    },
-    /** For DMs: auto-create a single default conversation that lives forever. */
-    ensureDmConversation(channel) {
-      return ensureDefaultDmConversation(channel);
-    },
-
     /* messages */
     postMessage({ conversationId, from, content, to = [], data = null, schema = null, contract = null }) {
       const conv = q.convById.get(conversationId);
       if (!conv) throw new Error(`unknown conversation: ${conversationId}`);
       if (conv.status !== "open") throw new Error(`conversation is closed: ${conversationId}`);
-      ensureChannel(conv.channel);
-      // "master" is the supervisor sentinel — never a persistent channel member,
-      // whether it's the sender or an addressed recipient.
-      if (from !== "master") q.insMember.run(conv.channel, from);
-      for (const m of to) if (m !== "master") q.insMember.run(conv.channel, m);
+      // Posting auto-joins the sender and any addressed agents (never "master").
+      addMember(conversationId, from);
+      for (const m of to) addMember(conversationId, m);
       // DSP safety axiom: a message declaring `decision_type: "IRREVERSIBLE"`
       // is forced to `pending` regardless of supervision mode — no level of
       // confidence authorizes autonomous execution of an irreversible action.
@@ -430,7 +432,6 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
       const msg = {
         id: randomUUID(),
         conversationId,
-        channel: conv.channel,
         from,
         content,
         to,
@@ -441,7 +442,7 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
         status,
       };
       q.insMsg.run(
-        msg.id, conversationId, conv.channel, from, content,
+        msg.id, conversationId, from, content,
         JSON.stringify(to),
         data != null ? JSON.stringify(data) : null,
         schema != null ? JSON.stringify(schema) : null,
@@ -492,12 +493,12 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
     unreadCount(agent) {
       return computeInbox(agent).total;
     },
-    waitForMessage({ agent, conversationId = null, channel = null, timeoutMs = 25000 }) {
+    waitForMessage({ agent, conversationId = null, timeoutMs = 25000 }) {
       // If a specific conversation is named, drain immediately if there is unread.
       const immediate = conversationId ? unreadFor(agent, conversationId) : null;
       if (immediate && immediate.length) return Promise.resolve(immediate);
       return new Promise((resolve) => {
-        const w = { agent, conversationId, channel, resolve, timer: null };
+        const w = { agent, conversationId, resolve, timer: null };
         w.timer = setTimeout(() => {
           waiters.delete(w);
           resolve([]);
@@ -520,9 +521,9 @@ export function createStore({ dbPath = join(DEFAULT_CONFIG_DIR, "switchboard.db"
     setConversationState(conversationId, content, agent) {
       const conv = q.convById.get(conversationId);
       if (!conv) throw new Error(`unknown conversation: ${conversationId}`);
-      // Real agents become members of the channel; the human "supervisor"
+      // Real agents writing the doc become members; the human "supervisor"
       // sentinel does not (it isn't a registered agent).
-      if (q.agentByName.get(agent)) q.insMember.run(conv.channel, agent);
+      addMember(conversationId, agent);
       const updatedAt = Date.now();
       q.setState.run(conversationId, content, updatedAt, agent);
       return { conversationId, content, updatedAt, updatedBy: agent };
@@ -573,6 +574,8 @@ function ensureSchema(db) {
   // is still at the prior version on disk.
   if (userVersion < 2) migrateV1toV2(db);
   if (userVersion < 3) migrateV2toV3(db);
+  if (userVersion < 4) migrateV3toV4(db);
+  if (userVersion < 5) migrateV4toV5(db);
   db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`);
 }
 
@@ -584,22 +587,14 @@ function createLatestSchema(db) {
       registeredAt INTEGER NOT NULL,
       lastSeenAt INTEGER NOT NULL
     );
-    CREATE TABLE IF NOT EXISTS channels (
-      name TEXT PRIMARY KEY,
-      createdAt INTEGER NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS channel_members (
-      channel TEXT NOT NULL,
-      agent TEXT NOT NULL,
-      PRIMARY KEY (channel, agent)
-    );
     CREATE TABLE IF NOT EXISTS conversations (
       id TEXT PRIMARY KEY,
-      channel TEXT NOT NULL,
       title TEXT NOT NULL,
       purpose TEXT,
       successCriteria TEXT,
       contract_name TEXT,
+      dm_key TEXT,
+      project_id TEXT,
       status TEXT NOT NULL DEFAULT 'open',
       createdAt INTEGER NOT NULL,
       createdBy TEXT NOT NULL,
@@ -607,11 +602,18 @@ function createLatestSchema(db) {
       closedBy TEXT,
       closedOutcome TEXT
     );
-    CREATE INDEX IF NOT EXISTS idx_conversations_channel ON conversations (channel, status, createdAt);
+    CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations (status, createdAt);
+    CREATE INDEX IF NOT EXISTS idx_conversations_dmkey ON conversations (dm_key);
+    CREATE INDEX IF NOT EXISTS idx_conversations_project ON conversations (project_id);
+    CREATE TABLE IF NOT EXISTS conversation_members (
+      conversation_id TEXT NOT NULL,
+      agent TEXT NOT NULL,
+      PRIMARY KEY (conversation_id, agent)
+    );
+    CREATE INDEX IF NOT EXISTS idx_conv_members_agent ON conversation_members (agent);
     CREATE TABLE IF NOT EXISTS messages (
       id TEXT PRIMARY KEY,
       conversation_id TEXT NOT NULL,
-      channel TEXT NOT NULL,
       from_agent TEXT NOT NULL,
       content TEXT NOT NULL,
       to_json TEXT,
@@ -751,11 +753,69 @@ function migrateV2toV3(db) {
   }
 }
 
+/** v3 → v4 (conversations-only): channels collapse into conversations. Each
+ *  conversation gets its own members (inherited from the channel it lived in)
+ *  and an optional `dm_key` (the canonical 1:1 pair, taken from `dm:a+b`
+ *  channels). The channels / channel_members tables and the `channel` columns
+ *  are dropped. Idempotent on reopen. */
+function migrateV3toV4(db) {
+  db.exec(`CREATE TABLE IF NOT EXISTS conversation_members (
+    conversation_id TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    PRIMARY KEY (conversation_id, agent)
+  );`);
+
+  // Inherit membership from the owning channel (skip if channel_members is gone
+  // because a prior partial run already migrated).
+  const hasChannelMembers = !!db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='channel_members'"
+  ).get();
+  if (hasChannelMembers) {
+    db.exec(`INSERT OR IGNORE INTO conversation_members(conversation_id, agent)
+      SELECT c.id, m.agent FROM conversations c
+      JOIN channel_members m ON m.channel = c.channel;`);
+  }
+
+  const convCols = db.prepare("PRAGMA table_info(conversations)").all().map((c) => c.name);
+  if (!convCols.includes("dm_key")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN dm_key TEXT");
+  }
+  if (convCols.includes("channel")) {
+    db.exec("UPDATE conversations SET dm_key = substr(channel, 4) WHERE channel LIKE 'dm:%' AND (dm_key IS NULL OR dm_key = '')");
+    // Give migrated channel-default conversations a recognizable title.
+    db.exec("UPDATE conversations SET title = channel WHERE title = 'default' AND channel NOT LIKE 'dm:%'");
+    db.exec("UPDATE conversations SET title = replace(substr(channel, 4), '+', ' <-> ') WHERE title IN ('direct','default') AND channel LIKE 'dm:%'");
+    // Drop channel coupling: index + columns (SQLite ≥ 3.35 supports DROP COLUMN).
+    db.exec("DROP INDEX IF EXISTS idx_conversations_channel");
+    db.exec("ALTER TABLE conversations DROP COLUMN channel");
+  }
+  const msgCols = db.prepare("PRAGMA table_info(messages)").all().map((c) => c.name);
+  if (msgCols.includes("channel")) {
+    db.exec("ALTER TABLE messages DROP COLUMN channel");
+  }
+
+  db.exec("DROP TABLE IF EXISTS channel_members");
+  db.exec("DROP TABLE IF EXISTS channels");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_conv_members_agent ON conversation_members (agent)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_conversations_dmkey ON conversations (dm_key)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_conversations_status ON conversations (status, createdAt)");
+}
+
+/** v4 → v5 (conversations-only refinement): conversations gain an optional
+ *  `project_id` linking them to a project (the new top-level grouping that
+ *  replaced channels). Idempotent on reopen. */
+function migrateV4toV5(db) {
+  const convCols = db.prepare("PRAGMA table_info(conversations)").all().map((c) => c.name);
+  if (!convCols.includes("project_id")) {
+    db.exec("ALTER TABLE conversations ADD COLUMN project_id TEXT");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_conversations_project ON conversations (project_id)");
+}
+
 /**
  * @typedef {Object} Message
  * @property {string} id
  * @property {string} conversationId
- * @property {string} channel
  * @property {string} from
  * @property {string} content
  * @property {string[]} to

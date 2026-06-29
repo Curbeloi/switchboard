@@ -3,7 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>switchboard — supervision</title>
+    <title>Switchboard — supervision</title>
+    <link rel="icon" type="image/svg+xml" href="logo.svg" />
     <script>
       // Anti-FOUC: apply the saved theme before first paint.
       (() => {
@@ -22,80 +23,36 @@
   <body class="h-screen bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-200 font-sans flex flex-col overflow-hidden">
     <header class="h-12 flex-shrink-0 border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 flex items-center justify-between">
       <div class="flex items-center gap-2">
-        <h1 class="text-base font-semibold tracking-wide text-slate-900 dark:text-slate-100" data-i18n="app.title">switchboard</h1>
-        <button id="toggle-channels" class="text-lg leading-none rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 hover:border-blue-500 hover:text-blue-600" data-i18n-title="toggleChannels" title="channels panel">◧</button>
-        <button id="toggle-conv" class="text-lg leading-none rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 hover:border-blue-500 hover:text-blue-600" data-i18n-title="toggleConversations" title="conversations panel">◨</button>
+        <img src="logo.svg" alt="" class="shrink-0" style="height:28px;width:28px" />
+        <h1 class="text-base font-semibold tracking-wide text-slate-900 dark:text-slate-100" data-i18n="app.title">Switchboard</h1>
+        <button id="toggle-left" class="leading-none rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1.5 hover:border-blue-500 hover:text-blue-600" data-i18n-title="toggleProjects" title="projects panel" data-ico="layout-left"></button>
+        <button id="toggle-conv" class="leading-none rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1.5 hover:border-blue-500 hover:text-blue-600" data-i18n-title="toggleConversations" title="conversations panel" data-ico="layout-right"></button>
       </div>
       <div class="flex items-center gap-2">
         <span id="status" class="text-xs px-2.5 py-1 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-mono">connecting…</span>
-        <button id="settings-btn" class="text-xl leading-none rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 hover:border-blue-500 hover:text-blue-600" data-i18n-title="settings" title="Settings">⚙︎</button>
+        <button id="settings-btn" class="leading-none rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1.5 hover:border-blue-500 hover:text-blue-600" data-i18n-title="settings" title="Settings" data-ico="settings-gear"></button>
       </div>
     </header>
 
     <div id="overlay" class="overlay" hidden></div>
 
     <main class="flex-1 flex min-h-0">
-      <!-- Channels + agents (left column) -->
-      <aside id="col-channels" class="order-1 w-60 flex-shrink-0 border-r border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-y-auto flex flex-col">
+      <!-- Left: projects (select one → its conversations on the right) + agents -->
+      <aside id="col-left" class="order-1 w-60 flex-shrink-0 border-r border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 overflow-y-auto flex flex-col">
         <section class="p-3">
-          <h2 class="text-[10px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400 mb-2" data-i18n="channels">Channels</h2>
-          <ul id="channels" class="space-y-0.5"><li class="text-xs text-slate-400 italic px-2" data-i18n="noChannels">no channels yet</li></ul>
-          <div id="new-channel" class="flex gap-1 mt-2">
-            <input type="text" id="new-channel-name" data-i18n-placeholder="newChannel" placeholder="new channel…" class="flex-1 min-w-0 text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 font-mono" />
-            <button id="new-channel-btn" class="px-2 rounded bg-slate-200 dark:bg-slate-700 dark:text-slate-200 hover:bg-blue-500 hover:text-white text-sm" data-i18n-title="createChannel" title="create channel">+</button>
+          <div class="flex items-center justify-between mb-2">
+            <h2 class="text-[10px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400" data-i18n="projects">Projects</h2>
+            <button id="project-add-btn" class="text-xs px-1.5 py-1 rounded bg-slate-200 dark:bg-slate-700 dark:text-slate-200 hover:bg-blue-500 hover:text-white" data-i18n-title="newProject" title="new project" data-ico="plus-small" data-ico-size="14"></button>
           </div>
+          <ul id="projects" class="space-y-0.5"><li class="text-xs text-slate-400 italic px-2" data-i18n="noProjects">no projects yet</li></ul>
         </section>
         <section class="p-3 border-t border-slate-200 dark:border-slate-700">
           <h2 class="text-[10px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400 mb-2" data-i18n="agents">Agents</h2>
           <ul id="agents" class="space-y-0.5"><li class="text-xs text-slate-400 italic px-2" data-i18n="noAgents">no agents yet</li></ul>
         </section>
-        <section class="p-3 border-t border-slate-200 dark:border-slate-700">
-          <div class="flex items-center justify-between mb-2">
-            <h2 class="text-[10px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400" data-i18n="projects">Projects</h2>
-            <button id="project-add-btn" class="text-xs px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-700 dark:text-slate-200 hover:bg-blue-500 hover:text-white" data-i18n-title="newProject" title="new project">+</button>
-          </div>
-          <ul id="projects" class="space-y-1"><li class="text-xs text-slate-400 italic px-2" data-i18n="noProjects">no projects yet</li></ul>
-        </section>
       </aside>
 
-      <!-- Conversations of selected channel (right column) -->
-      <aside id="col-conversations" class="order-3 w-72 flex-shrink-0 border-l border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 flex flex-col overflow-hidden">
-        <div id="conv-header" class="px-3 py-2 border-b border-slate-200 dark:border-slate-700">
-          <h2 id="conv-channel-name" class="font-mono text-sm text-slate-700 dark:text-slate-200">—</h2>
-          <p id="conv-channel-meta" class="text-[11px] text-slate-400 font-mono mt-0.5" data-i18n="selectChannel">select a channel</p>
-        </div>
-
-        <!-- Collapsible: create a new conversation (first, above the list) -->
-        <section id="sec-new" class="border-b border-slate-200 dark:border-slate-700 hidden">
-          <button type="button" class="collapse-toggle w-full flex items-center justify-between px-3 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-700/40" data-collapse="conv-new">
-            <span class="text-[10px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400" data-i18n="newConversation">New conversation</span>
-            <span class="collapse-caret text-slate-400 text-[10px]">▾</span>
-          </button>
-          <div id="conv-new" class="hidden px-3 pb-3">
-            <input type="text" id="new-conv-title" data-i18n-placeholder="newConvTitle" placeholder="new conversation title…" class="w-full text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 font-mono" />
-            <input type="text" id="new-conv-purpose" data-i18n-placeholder="newConvPurpose" placeholder="purpose (optional)" class="w-full text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 mt-1" />
-            <select id="new-conv-contract" class="w-full text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 mt-1 font-mono" title="optional contract (DSP-style governance)">
-              <option value="" data-i18n="noContract">no contract</option>
-            </select>
-            <button id="new-conv-btn" class="mt-1 w-full rounded bg-blue-500 hover:bg-blue-600 text-white text-xs py-1 font-semibold" data-i18n="openConversation">+ Open conversation</button>
-          </div>
-        </section>
-
-        <!-- Collapsible: channel agents (add / remove members) -->
-        <section id="sec-members" class="border-b border-slate-200 dark:border-slate-700 hidden">
-          <button type="button" class="collapse-toggle w-full flex items-center justify-between px-3 py-2 text-left hover:bg-slate-50 dark:hover:bg-slate-700/40" data-collapse="conv-members-body">
-            <span class="text-[10px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400" data-i18n="agentsSection">Agents</span>
-            <span class="collapse-caret text-slate-400 text-[10px]">▾</span>
-          </button>
-          <div id="conv-members-body" class="hidden px-3 pb-3">
-            <div id="conv-members" class="space-y-1.5"></div>
-          </div>
-        </section>
-
-        <ul id="conversations" class="flex-1 overflow-y-auto px-2 py-2 space-y-1"></ul>
-      </aside>
-
-      <!-- Col 3: messages of selected conversation -->
+      <!-- Messages of the selected conversation -->
       <section id="feed" class="order-2 flex-1 flex flex-col overflow-hidden bg-slate-50 dark:bg-slate-900 relative">
         <div id="msg-header" class="px-4 py-2 border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
           <div class="flex items-center justify-between gap-2">
@@ -106,6 +63,8 @@
             </div>
           </div>
           <p id="conv-meta" class="text-[11px] text-slate-400 font-mono mt-0.5"></p>
+          <!-- Members of the selected conversation (chips + add agent) -->
+          <div id="conv-members" class="mt-1.5 hidden"></div>
         </div>
 
         <div id="state-pane" class="hidden border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-3">
@@ -144,20 +103,26 @@
             <button id="master-compose" class="rounded bg-blue-500 hover:bg-blue-600 text-white text-xs px-4 py-1 font-semibold whitespace-nowrap shrink-0" data-i18n="masterCompose">Compose…</button>
             <button id="master-analyze" class="rounded border border-purple-400 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/30 text-xs px-4 py-1 font-semibold whitespace-nowrap shrink-0" data-i18n="masterAnalyze">Analyze</button>
             <button id="master-delegate" class="rounded border border-purple-400 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-900/30 text-xs px-4 py-1 font-semibold whitespace-nowrap shrink-0" data-i18n="masterDelegate">Ask agent to review</button>
+            <button id="master-reset" class="ml-auto rounded border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:border-blue-500 hover:text-blue-600 text-xs px-3 py-1 font-semibold whitespace-nowrap shrink-0 inline-flex items-center gap-1" data-ico="reset" data-ico-size="13"><span data-i18n="masterReset">Reset</span></button>
           </div>
-          <div class="mt-2 flex gap-2 items-center">
+          <!-- Code-review row (repo path + "Review code") hidden for now -->
+          <div class="mt-2 hidden gap-2 items-center">
             <input type="text" id="master-dir" class="flex-1 min-w-0 text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 font-mono" data-i18n-placeholder="masterDirPlaceholder" placeholder="/ruta/al/repo a revisar (git diff)" />
             <button id="master-review" class="rounded border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:border-blue-500 hover:text-blue-600 text-xs px-4 py-1 font-semibold whitespace-nowrap shrink-0" data-i18n="masterReview">Review code</button>
           </div>
           <div id="master-preview" class="hidden mt-2 rounded border border-purple-300 dark:border-purple-700 bg-purple-50 dark:bg-purple-900/20 p-2">
             <div class="text-[10px] uppercase tracking-wider font-semibold text-purple-600 dark:text-purple-400 mb-1" data-i18n="masterPreview">Preview — edit before sending</div>
             <textarea id="master-draft" rows="3" class="w-full text-sm rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1"></textarea>
+            <div id="master-draft-preview" class="hidden mt-1">
+              <div class="text-[10px] uppercase tracking-wider font-semibold text-purple-600 dark:text-purple-400 mb-1" data-i18n="masterRendered">Rendered</div>
+              <div id="master-draft-rendered" class="md-body text-xs rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 p-2 max-h-60 overflow-y-auto"></div>
+            </div>
             <div class="mt-1 flex gap-2">
               <button id="master-send" class="rounded bg-green-600 hover:bg-green-700 text-white text-xs px-3 py-1 font-semibold" data-i18n="masterSend">Confirm & send</button>
               <button id="master-cancel" class="rounded border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 text-xs px-3 py-1" data-i18n="masterCancel">Cancel</button>
             </div>
           </div>
-          <div id="master-analysis" class="hidden mt-2 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 p-2 text-xs whitespace-pre-wrap text-slate-700 dark:text-slate-200 max-h-60 overflow-y-auto"></div>
+          <div id="master-analysis" class="md-body hidden mt-2 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 p-2 text-xs text-slate-700 dark:text-slate-200 max-h-60 overflow-y-auto"></div>
         </div>
 
         <!-- Live agent console (xterm.js over /console) — docked over the center -->
@@ -169,11 +134,35 @@
           <div id="term" class="console-term"></div>
         </div>
       </section>
+
+      <!-- Right: conversations of the selected project (or all) -->
+      <aside id="col-conversations" class="order-3 w-72 flex-shrink-0 border-l border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 flex flex-col overflow-hidden">
+        <div id="conv-header" class="px-3 py-2 border-b border-slate-200 dark:border-slate-700">
+          <div class="flex items-center justify-between gap-1">
+            <h2 id="conv-scope-name" class="font-mono text-sm text-slate-700 dark:text-slate-200 truncate" data-i18n="allConversations">All conversations</h2>
+            <button id="new-conv-toggle" class="shrink-0 text-xs px-1.5 py-1 rounded bg-slate-200 dark:bg-slate-700 dark:text-slate-200 hover:bg-blue-500 hover:text-white" data-i18n-title="newConversation" title="new conversation" data-ico="plus-small" data-ico-size="14"></button>
+          </div>
+          <p id="conv-scope-meta" class="text-[11px] text-slate-400 font-mono mt-0.5"></p>
+          <div id="new-conv-form" class="hidden mt-2 space-y-1">
+            <input type="text" id="new-conv-title" data-i18n-placeholder="newConvTitle" placeholder="new conversation title…" class="w-full text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 font-mono" />
+            <input type="text" id="new-conv-purpose" data-i18n-placeholder="newConvPurpose" placeholder="purpose (optional)" class="w-full text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1" />
+            <select id="new-conv-project" class="w-full text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 font-mono" title="relate this conversation to a project">
+              <option value="" data-i18n="noProjectOption">no project</option>
+            </select>
+            <select id="new-conv-contract" class="w-full text-xs rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1 font-mono" title="optional contract (DSP-style governance)">
+              <option value="" data-i18n="noContract">no contract</option>
+            </select>
+            <button id="new-conv-btn" class="w-full rounded bg-blue-500 hover:bg-blue-600 text-white text-xs py-1 font-semibold" data-i18n="openConversation">+ Open conversation</button>
+          </div>
+        </div>
+        <ul id="conversations" class="flex-1 overflow-y-auto px-2 py-2 space-y-1"></ul>
+      </aside>
     </main>
 
     <script src="vendor/xterm.js"></script>
     <script src="vendor/addon-fit.js"></script>
     <script src="i18n.js"></script>
+    <script src="vendor/icons.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

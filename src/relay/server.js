@@ -61,9 +61,9 @@ export async function startRelay({
 
   // Launches/supervises engine CLIs (Claude Code) as PTY agents per project.
   const agents = createAgentManager({ relay: `http://${host}:${port}`, broadcast, store });
-  // Persisted projects' agents should exist as identities on boot (visible +
-  // addable to channels even before they're started).
-  for (const p of config.readProjects()) agents.registerIdentity(p.agentName);
+  // Persisted environments' agents should exist as identities on boot (visible +
+  // addable to conversations even before they're started).
+  for (const e of config.readEnvironments()) agents.registerIdentity(e.agentName);
 
   mountRoutes(app, { store, broadcast, reviewer, config, agents });
 
@@ -132,12 +132,15 @@ export async function startRelay({
     );
     ws.on("close", () => subscribers.delete(ws));
   });
-  // Each /console client attaches to one project's PTY (?project=<id>).
+  // Each /console client attaches to one environment's PTY (?env=<id>).
   consoleWss.on("connection", (ws, req) => {
-    let projectId = null;
-    try { projectId = new URL(req.url, "http://localhost").searchParams.get("project"); } catch { /* noop */ }
-    if (!projectId) { try { ws.close(); } catch { /* noop */ } return; }
-    agents.attach(ws, projectId);
+    let envId = null;
+    try {
+      const params = new URL(req.url, "http://localhost").searchParams;
+      envId = params.get("env") || params.get("project"); // accept legacy ?project=
+    } catch { /* noop */ }
+    if (!envId) { try { ws.close(); } catch { /* noop */ } return; }
+    agents.attach(ws, envId);
   });
   // Don't leave orphaned agent CLIs when the relay stops/restarts.
   for (const sig of ["SIGINT", "SIGTERM"]) {
