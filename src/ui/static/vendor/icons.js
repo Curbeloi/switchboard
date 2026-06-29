@@ -32,6 +32,8 @@
     "chevron-right": '<path d="M8 15L13 10L8 5" stroke="currentColor" stroke-linecap="square"/>',
     review:
       '<path d="M7 14.5H13M7 7.99512H10.0049M10.0049 7.99512H13M10.0049 7.99512V5M10.0049 7.99512V11M18 18V2L2 2L2 18H18Z" stroke="currentColor"/>',
+    graph:
+      '<path d="M6.5 6.7L13.5 6.1M6.2 7.6L9.4 13.2M13.8 7.6L10.6 13.2" stroke="currentColor" stroke-linecap="round"/><circle cx="5" cy="6" r="2.4" fill="currentColor"/><circle cx="15" cy="5.6" r="2.4" fill="currentColor"/><circle cx="10" cy="15" r="2.4" fill="currentColor"/>',
   };
 
   function OCIcon(name, opts) {

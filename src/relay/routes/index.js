@@ -7,6 +7,7 @@ import { basename, join, isAbsolute, resolve, dirname } from "node:path";
 import { homedir } from "node:os";
 import { DEFAULT_POLICY, REVIEWER_PROVIDERS, listModels, reviewerCliAvailability, complete } from "../reviewer.js";
 import { VALID_ENGINES } from "../config.js";
+import { runReview } from "../agents/orchestrator.js";
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 const execFileAsync = promisify(execFile);
@@ -1017,6 +1018,102 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     if (!agents) return res.status(409).json({ error: "environments unavailable" });
     const ok = agents.stop(req.params.id);
     res.json({ ok, status: agents.statusOf(req.params.id) });
+  });
+
+  /* ---- Subagents: per-environment review nodes orchestrated with LangGraph.
+   * Human/master surface (no agent token), mirroring projects/environments. ---- */
+  api.get("/environments/:id/subagents", (req, res) => {
+    if (!config) return res.json([]);
+    if (!config.getEnvironment(req.params.id)) return res.status(404).json({ error: "environment not found" });
+    res.json(config.subagentsOfEnvironment(req.params.id));
+  });
+  api.post("/environments/:id/subagents", (req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    if (!config.getEnvironment(req.params.id)) return res.status(404).json({ error: "environment not found" });
+    try {
+      const { name, role, provider, model, dependsOn } = req.body ?? {};
+      const sub = config.addSubagent({ environmentId: req.params.id, name, role, provider, model, dependsOn });
+      broadcast({ type: "subagent.created", subagent: sub });
+      res.json(sub);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+  api.put("/subagents/:id", (req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    try {
+      const sub = config.updateSubagent(req.params.id, req.body ?? {});
+      if (!sub) return res.status(404).json({ error: "subagent not found" });
+      broadcast({ type: "subagent.updated", subagent: sub });
+      res.json(sub);
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+  api.delete("/subagents/:id", (req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    if (!config.removeSubagent(req.params.id)) return res.status(404).json({ error: "subagent not found" });
+    broadcast({ type: "subagent.deleted", id: req.params.id });
+    res.json({ ok: true });
+  });
+
+  /* The whole node graph for the canvas (one bootstrap call). */
+  api.get("/graph", (_req, res) => {
+    if (!config) return res.json({ projects: [], environments: [], subagents: [] });
+    res.json({
+      projects: config.readProjects(),
+      environments: config.readEnvironments().map((e) => ({ ...e, status: agents?.statusOf(e.id) ?? "stopped" })),
+      subagents: config.readSubagents(),
+    });
+  });
+
+  /* Master-triggered review run: compile the environment's subagents into a
+   * LangGraph graph and run it over the work (git diff of the env dir + optional
+   * conversation transcript). Returns one verdict per subagent. */
+  api.post("/environments/:id/review", async (req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    const env = config.getEnvironment(req.params.id);
+    if (!env) return res.status(404).json({ error: "environment not found" });
+    const subagents = config.subagentsOfEnvironment(env.id);
+    if (!subagents.length) return res.status(400).json({ error: "this environment has no subagents to run" });
+
+    const dir = (typeof req.body?.dir === "string" && req.body.dir.trim()) || env.dir;
+    let input = "";
+    let truncated = false;
+    try {
+      const r = await gitReview(dir);
+      truncated = r.truncated;
+      input += `Directory: ${dir}\n\ngit status --short:\n${r.status || "(clean)"}\n\n` +
+        `git diff HEAD${r.truncated ? " (TRUNCATED)" : ""}:\n${r.diff || "(no uncommitted changes)"}`;
+    } catch (err) {
+      input += `Directory: ${dir}\n(could not read a git diff: ${err.message})`;
+    }
+    if (req.body?.conversation) {
+      const conv = store.getConversation(req.body.conversation);
+      if (conv) {
+        const msgs = store.readMessages({ conversationId: conv.id, since: 0 }).slice(-30);
+        input += `\n\nConversation "${conv.title}" (recent):\n` +
+          msgs.map((m) => `${m.from}: ${m.content}`).join("\n");
+      }
+    }
+
+    try {
+      const rc = config.readReviewerConfig?.() ?? {};
+      const { verdicts } = await runReview({
+        subagents,
+        input,
+        resolveKey: resolveProviderKey,
+        defaults: {
+          provider: reviewer?.provider ?? null,
+          model: reviewer?.model ?? rc.model ?? null,
+          baseUrl: rc.baseUrl ?? null,
+        },
+      });
+      broadcast({ type: "subagent.review", environmentId: env.id, verdicts, truncated });
+      res.json({ environmentId: env.id, verdicts, truncated });
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
   });
 
   app.use("/api", api);

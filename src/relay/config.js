@@ -75,6 +75,7 @@ export function createConfigStore(dir = DEFAULT_CONFIG_DIR) {
   const policyPath = join(dir, "policy.md");
   const projectsPath = join(dir, "projects.json");        // top-level projects [{id,name,createdAt}]
   const environmentsPath = join(dir, "environments.json"); // [{id,name,dir,engine,agentName,projectId,createdAt}]
+  const subagentsPath = join(dir, "subagents.json");       // [{id,environmentId,name,role,provider,model,dependsOn[],createdAt}]
 
   function ensureDir() {
     mkdirSync(contractsDir, { recursive: true });
@@ -240,8 +241,10 @@ export function createConfigStore(dir = DEFAULT_CONFIG_DIR) {
     if (next.length === list.length) return false;
     writeProjects(next);
     const envs = readEnvironments();
+    const removed = envs.filter((e) => e.projectId === id);
     const keep = envs.filter((e) => e.projectId !== id);
     if (keep.length !== envs.length) writeEnvironments(keep);
+    for (const e of removed) removeSubagentsOfEnvironment(e.id); // cascade subagents
     return true;
   }
 
@@ -287,6 +290,103 @@ export function createConfigStore(dir = DEFAULT_CONFIG_DIR) {
     const next = list.filter((e) => e.id !== id);
     if (next.length === list.length) return false;
     writeEnvironments(next);
+    removeSubagentsOfEnvironment(id); // cascade subagents
+    return true;
+  }
+
+  /* --- subagents (review nodes; belong to an environment; form a DAG) --- */
+  function readSubagents() {
+    return readJsonArray(subagentsPath);
+  }
+  function getSubagent(id) {
+    return readSubagents().find((s) => s.id === id) ?? null;
+  }
+  function writeSubagents(list) {
+    ensureDir();
+    writeFileSync(subagentsPath, JSON.stringify(list, null, 2));
+    return list;
+  }
+  function subagentsOfEnvironment(environmentId) {
+    return readSubagents().filter((s) => s.environmentId === environmentId);
+  }
+  function removeSubagentsOfEnvironment(environmentId) {
+    const list = readSubagents();
+    const next = list.filter((s) => s.environmentId !== environmentId);
+    if (next.length !== list.length) writeSubagents(next);
+  }
+  /** Throw if giving subagent `id` the deps `dependsOn` (among its env `siblings`)
+   *  would form a cycle. `id` is null for a not-yet-created subagent. */
+  function assertNoCycle(siblings, id, dependsOn) {
+    const edges = new Map(siblings.map((s) => [s.id, [...(s.dependsOn || [])]]));
+    const start = id ?? "__new__";
+    edges.set(start, [...dependsOn]);
+    const seen = new Set();
+    const stack = [...dependsOn];
+    while (stack.length) {
+      const n = stack.pop();
+      if (n === start) throw new Error("dependency cycle detected");
+      if (seen.has(n)) continue;
+      seen.add(n);
+      for (const d of edges.get(n) || []) stack.push(d);
+    }
+  }
+  /** Validate + dedupe a subagent's dependencies (siblings only, no self, no cycle). */
+  function validateDeps(environmentId, id, dependsOn) {
+    if (dependsOn == null) return [];
+    if (!Array.isArray(dependsOn)) throw new Error("dependsOn must be an array");
+    const siblings = subagentsOfEnvironment(environmentId);
+    const ids = new Set(siblings.map((s) => s.id));
+    for (const d of dependsOn) {
+      if (d === id) throw new Error("a subagent cannot depend on itself");
+      if (!ids.has(d)) throw new Error(`unknown dependency: ${d}`);
+    }
+    assertNoCycle(siblings, id, dependsOn);
+    return [...new Set(dependsOn)];
+  }
+  function addSubagent({ environmentId, name, role = "", provider, model, dependsOn = [] }) {
+    if (!validName(name)) throw new Error(`invalid subagent name: ${name}`);
+    if (!environmentId || !getEnvironment(environmentId)) throw new Error("a valid environmentId is required");
+    const deps = validateDeps(environmentId, null, dependsOn);
+    const sub = {
+      id: randomUUID(),
+      environmentId,
+      name,
+      role: typeof role === "string" ? role : "",
+      provider: provider || null,
+      model: model || null,
+      dependsOn: deps,
+      createdAt: Date.now(),
+    };
+    writeSubagents([...readSubagents(), sub]);
+    return sub;
+  }
+  function updateSubagent(id, patch = {}) {
+    const list = readSubagents();
+    const cur = list.find((s) => s.id === id);
+    if (!cur) return null;
+    if (patch.name != null && !validName(patch.name)) throw new Error(`invalid subagent name: ${patch.name}`);
+    const dependsOn = patch.dependsOn != null
+      ? validateDeps(cur.environmentId, id, patch.dependsOn)
+      : cur.dependsOn;
+    const next = {
+      ...cur,
+      ...(patch.name != null ? { name: patch.name } : {}),
+      ...(patch.role != null ? { role: String(patch.role) } : {}),
+      ...("provider" in patch ? { provider: patch.provider || null } : {}),
+      ...("model" in patch ? { model: patch.model || null } : {}),
+      dependsOn,
+    };
+    writeSubagents(list.map((s) => (s.id === id ? next : s)));
+    return next;
+  }
+  function removeSubagent(id) {
+    const list = readSubagents();
+    const next = list.filter((s) => s.id !== id);
+    if (next.length === list.length) return false;
+    // drop this id from any sibling's dependsOn so no dangling edges remain
+    writeSubagents(next.map((s) => (
+      (s.dependsOn || []).includes(id) ? { ...s, dependsOn: s.dependsOn.filter((d) => d !== id) } : s
+    )));
     return true;
   }
 
@@ -347,5 +447,11 @@ export function createConfigStore(dir = DEFAULT_CONFIG_DIR) {
     environmentsOfProject,
     addEnvironment,
     removeEnvironment,
+    readSubagents,
+    getSubagent,
+    subagentsOfEnvironment,
+    addSubagent,
+    updateSubagent,
+    removeSubagent,
   };
 }

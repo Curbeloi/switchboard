@@ -30,11 +30,22 @@
       </div>
       <div class="flex items-center gap-2">
         <span id="status" class="text-xs px-2.5 py-1 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300 font-mono">connecting…</span>
+        <button id="graph-btn" class="leading-none rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1.5 hover:border-blue-500 hover:text-blue-600" data-i18n-title="graphView" title="Node graph" data-ico="graph"></button>
         <button id="settings-btn" class="leading-none rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 dark:text-slate-200 px-2 py-1.5 hover:border-blue-500 hover:text-blue-600" data-i18n-title="settings" title="Settings" data-ico="settings-gear"></button>
       </div>
     </header>
 
     <div id="overlay" class="overlay" hidden></div>
+
+    <!-- Full-page node graph: master → projects → environments → subagents -->
+    <div id="graph-pane" class="graph-pane" hidden>
+      <div class="graph-bar">
+        <span class="graph-title" data-ico="graph" data-ico-size="16"><span data-i18n="graphTitle">Node graph</span></span>
+        <button id="graph-close" class="btn" type="button" data-i18n="close">Close</button>
+      </div>
+      <div id="graph-canvas" class="graph-canvas"></div>
+      <aside id="graph-panel" class="graph-panel" hidden></aside>
+    </div>
 
     <main class="flex-1 flex min-h-0">
       <!-- Left: projects (select one → its conversations on the right) + agents -->
@@ -163,6 +174,7 @@
     <script src="vendor/addon-fit.js"></script>
     <script src="i18n.js"></script>
     <script src="vendor/icons.js"></script>
+    <script src="vendor/cytoscape.min.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

@@ -94,8 +94,9 @@ function parseDecision(text) {
   }
 }
 
-/** Turn raw model text into a normalized decision, escalating if unparseable. */
-function decisionFrom(text, label) {
+/** Turn raw model text into a normalized decision, escalating if unparseable.
+ *  Exported so the subagent orchestrator reuses the same parse + fail-safe. */
+export function decisionFrom(text, label) {
   const parsed = text != null ? parseDecision(text) : null;
   if (!parsed) return { decision: "escalate", reason: `${label} returned no parseable decision` };
   return {
