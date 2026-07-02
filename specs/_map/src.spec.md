@@ -1,54 +1,39 @@
 ---
-source_hash: 26a76c98d27282313786fcc155e901569a17a930
-generated_at: 2026-06-30T00:24:18.355Z
+source_hash: e82d3aa56d47f4503702ef7f5a18aa52e182ec26
+generated_at: 2026-07-02T16:23:13.377Z
 ---
 # src
 
 ## Purpose
-The `src` directory is the complete implementation of `@icurbe/switchboard`, a supervised inter-agent messaging relay. It splits into two runtime halves: a persistent relay daemon (HTTP + WebSocket server, SQLite store, supervision console) and a per-session MCP stdio wrapper that exposes messaging tools to Claude Code agents. Supporting modules handle token persistence, agent installation, background listening, and a vanilla-JS supervision UI.
+The core implementation of switchboard, a supervised messaging relay between AI coding agents. It's split into an MCP stdio wrapper (`src/mcp/`), the relay daemon (`src/relay/`), a static web supervision UI (`src/ui/static/`), and shared CLI-facing modules (`src/install.js`, `src/listen.js`, `src/send.js`, `src/tokens.js`) that back the `switchboard` CLI subcommands.
 
 ## Key Components
-- `relay/server.js` — entry point for the daemon; wires Express + WebSocket, mounts routes, starts the reviewer and supervisor
-- `relay/store.js` — all persistence via `node:sqlite`; agents, channels, messages, read cursors, versioned schema with v1→v5 migrations
-- `relay/routes/index.js` — REST API (`/api/*`): message posting/approval, channel management, agent registration, setup/config, AI compose/analyze/review endpoints
-- `relay/reviewer.js` — LLM supervision gate; supports Anthropic, OpenAI-compatible, and `claude`/`opencode` CLI backends; `approve`/`reject`/`escalate` decisions; fail-safe escalates on error
-- `relay/agents/orchestrator.js` — LangGraph-based multi-subagent review graph for parallelizing LLM reviewer subagents
-- `relay/agents/manager.js` — lifecycle management for registered agents (install MCP, install opencode, token handling)
-- `relay/config.js` — durable file-backed config (`~/.switchboard`): mode, policy, contracts, engine selection; survives restarts
-- `relay/supervisor.js` — in-process readline REPL for human oversight; subscribes to broadcast events
-- `mcp/server.js` — MCP stdio server exposing 8 tools (`agent_send`, `agent_dm`, `agent_read`, `agent_inbox`, `agent_wait`, `agent_join`, `agent_list_channels`, `agent_list_agents`)
-- `mcp/client.js` — HTTP client factory (`createRelayClient`) wrapping all relay API calls with Bearer auth
-- `install.js` — `installMcp`/`installOpencode`/`ensureSkill`/`doctor`/`uninstallMcp`; writes session-start hooks and project skills; never touches `.mcp.json` directly
-- `listen.js` — polling background listener; emits one stdout line per new message for harness-driven wake-up; watermark-based, never advances read cursors
-- `send.js` — one-shot HTTP message sender; fallback when MCP tools are unavailable mid-session
-- `tokens.js` — shared token IO (`~/.switchboard/tokens.json`, keyed by `relay::agent`)
-- `ui/static/` — vanilla HTML/CSS/JS supervision UI; WebSocket-driven; setup wizard + settings overlay; i18n module; Tailwind + plain CSS
+- `mcp/server.js` / `mcp/client.js` — per-session MCP stdio server exposing agent tools; `client.js` is the sole HTTP client to the relay.
+- `relay/server.js` — boots Express + WebSocket server, wires store, routes, reviewer, config, and agent manager together.
+- `relay/store.js` — `node:sqlite`-backed persistence (agents, channels, messages, read cursors), with versioned migrations (v1→v5, latest adding conversations-only model per project memory).
+- `relay/routes/index.js` — all REST endpoints (`/api/*`), including git-review and "master" conversation compose/analyze prompt builders.
+- `relay/reviewer.js` — LLM-based pending-message reviewer (Anthropic API or `claude`/`opencode` CLI), plus model listing and CLI availability checks.
+- `relay/agents/manager.js` — manages registered agent identities, installs MCP/opencode integration per agent.
+- `relay/agents/orchestrator.js` — LangGraph-based multi-subagent review graph (`createReviewGraph`/`runReview`).
+- `relay/config.js` — durable on-disk config (mode, policy, contracts, engine) under `~/.switchboard`.
+- `relay/supervisor.js` — console REPL supervisor over relay events.
+- `ui/static/*` — vanilla JS/HTML/CSS supervision UI (Tailwind-built CSS, `i18n.js` for locale strings).
+- `install.js` — MCP/opencode installation, skill scaffolding, session-start hook, doctor/uninstall.
+- `listen.js`, `send.js`, `tokens.js` — background notification poller, fallback one-shot sender, shared token persistence.
 
 ## Exports / Public Interface
-- `startRelay(options)` — `relay/server.js`
-- `createStore(options)` — `relay/store.js`
-- `mountRoutes(app, deps)` — `relay/routes/index.js`
-- `createReviewer(config)`, `complete(provider, opts)`, `listModels(provider, opts)` — `relay/reviewer.js`
-- `createReviewGraph(subagents, opts)`, `runReview(opts)` — `relay/agents/orchestrator.js`
-- `createAgentManager(deps)` — `relay/agents/manager.js`
-- `createConfigStore(dir)` — `relay/config.js`
-- `startConsoleSupervisor(deps)` — `relay/supervisor.js`
-- `runMcp({ agent, relayUrl })` — `mcp/server.js`
-- `createRelayClient(relayUrl, token)` — `mcp/client.js`
-- `installMcp`, `installOpencode`, `ensureSkill`, `uninstallMcp`, `doctor`, `ensureSessionStartHook`, `removeSessionStartHook` — `install.js`
-- `runListen(opts)` — `listen.js`
-- `runSend(opts)` — `send.js`
-- `loadToken`, `saveToken`, `tokenKey` — `tokens.js`
+- `startRelay()` (server.js), `runMcp()` (mcp/server.js), `createRelayClient()` (mcp/client.js)
+- `createStore()`, `createConfigStore()`, `createReviewer()`, `mountRoutes()`, `createAgentManager()`, `createReviewGraph()`/`runReview()`
+- `installMcp()`, `installOpencode()`, `ensureSkill()`, `uninstallMcp()`, `doctor()`, `ensureSessionStartHook()`
+- `runListen()`, `runSend()`, `loadToken()`/`saveToken()`/`tokenKey()`
+- `startConsoleSupervisor()`
 
 ## Dependencies
-- External: `express`, `ws`, `@modelcontextprotocol/sdk`, `@langchain/langgraph`, `@anthropic-ai/sdk`, `ajv`
-- Node built-ins: `node:sqlite`, `node:http`, `node:fs`, `node:crypto`, `node:readline`, `node:child_process`, `node:path`, `node:os`, `node:module`
-- CLI tools (optional, runtime): `claude`, `opencode` (for CLI-backed reviewer and agent installation)
+Express, `ws`, `node:sqlite` (Node ≥22), `@anthropic-ai/sdk`, `@modelcontextprotocol/sdk`, `@langchain/langgraph`, `ajv` (schema validation), Node built-ins (`node:child_process`, `node:fs`, `node:crypto`, `node:os`). External CLIs invoked via `execFile`: `claude`, `opencode`, git.
 
 ## Notes
-- Identity derives from Bearer token only — `from` in request body is never trusted
-- Supervision mode (`manual`/`auto`/`llm`) is the central dispatch gate; `manual` and `auto` never invoke LLMs
-- All store methods are the only seam routes may use — SQL never leaks into routes, enabling clean backend swaps
-- The reviewer is fail-safe: any error escalates rather than auto-approving
-- The `conversations-only` model (DB v5) has replaced the prior channels hierarchy; schema migrations handle upgrade in-place
-- ESM-only (`"type": "module"`), Node ≥ 22, no bundler or TypeScript
+- Identity flows through Bearer tokens, never trusted request bodies (`requireAgent` pattern).
+- Reviewer fails safe: any error escalates rather than auto-approving.
+- Store migrations are incremental and additive (v1→v5); routes/MCP stay decoupled from schema via the store's documented method seam.
+- Engine is pluggable (`claude` vs `opencode`), validated via `VALID_ENGINES` in config.js.
+- UI has no build step for HTML/CSS/JS except Tailwind, which is compiled separately into `tailwind.css`.
