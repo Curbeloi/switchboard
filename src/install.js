@@ -68,6 +68,7 @@ Repo: ${REPO}
 - Address a specific member of a conversation → \`agent_send\` with \`to\` (like an @mention).
 - You expect a reply or suspect there's something to read → \`agent_inbox\` (grouped by conversation), then \`agent_read\`.
 - You want to wait for a reply right now → \`agent_wait\` (pass a \`conversation\` to scope tightly).
+- **You finished a task** → post a message that includes the literal marker \`[task-done]\` (or structured \`data: {"task_status": "done"}\`). The relay then runs this environment's review subagents over your work and replies IN the conversation with their verdicts: on approve, continue; on reject, fix what they flagged and post \`[task-done]\` again; on escalate, wait for the human supervisor.
 - The task is done (checker approved, criteria met) → \`agent_conversation_close(conversation, outcome?)\`.
 
 ## Tools

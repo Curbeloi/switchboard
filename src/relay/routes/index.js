@@ -7,33 +7,11 @@ import { basename, join, isAbsolute, resolve, dirname } from "node:path";
 import { homedir } from "node:os";
 import { DEFAULT_POLICY, REVIEWER_PROVIDERS, listModels, reviewerCliAvailability, complete } from "../reviewer.js";
 import { VALID_ENGINES } from "../config.js";
-import { runReview } from "../agents/orchestrator.js";
+import { gitReview, isTaskDone, runEnvironmentReview } from "../review-run.js";
 
 const ajv = new Ajv({ allErrors: true, strict: false });
 const execFileAsync = promisify(execFile);
 
-/* Read-only git inspection for the master's code-review action. Runs in `dir`
- * with execFile (no shell → no injection). Returns the uncommitted diff vs HEAD
- * plus a short status (so new/untracked files show up too). Throws if not a repo. */
-const REVIEW_DIFF_CAP = 100_000; // chars fed to the LLM (truncate huge diffs)
-async function gitReview(dir) {
-  const run = (args) =>
-    execFileAsync("git", ["-C", dir, ...args], { timeout: 15000, maxBuffer: 8 * 1024 * 1024 });
-  await run(["rev-parse", "--is-inside-work-tree"]); // throws if dir isn't a git repo
-  let diff = "";
-  try {
-    diff = (await run(["diff", "HEAD"])).stdout; // staged + unstaged vs last commit
-  } catch {
-    diff = (await run(["diff"])).stdout; // empty repo / no HEAD → unstaged only
-  }
-  const status = (await run(["status", "--short"])).stdout;
-  let truncated = false;
-  if (diff.length > REVIEW_DIFF_CAP) {
-    diff = diff.slice(0, REVIEW_DIFF_CAP);
-    truncated = true;
-  }
-  return { diff, status, truncated };
-}
 function masterReviewPrompt(conv, dir, { diff, status, truncated }, locale = null) {
   return {
     system:
@@ -125,7 +103,7 @@ function masterAnalyzePrompt(conv, transcript, instruction, locale = null, membe
   };
 }
 
-export function mountRoutes(app, { store, broadcast, reviewer = null, config = null, agents = null }) {
+export function mountRoutes(app, { store, broadcast, subscribe = null, reviewer = null, config = null, agents = null }) {
   const api = Router();
   /* Dynamic: the reviewer can be reconfigured at runtime (provider switched from
    *  Settings), so availability/backend must be read per request, not captured. */
@@ -433,6 +411,7 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     }
     // master is never a persistent member (the store skips it on post), so there
     // is nothing to leave.
+    masterDrafts.delete(conv.id); // a sent reply consumes any pending auto-draft
     broadcast({ type: "message.delivered", message: msg });
     res.json(msg);
   });
@@ -1074,40 +1053,16 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
     if (!config) return res.status(409).json({ error: "no config store" });
     const env = config.getEnvironment(req.params.id);
     if (!env) return res.status(404).json({ error: "environment not found" });
-    const subagents = config.subagentsOfEnvironment(env.id);
-    if (!subagents.length) return res.status(400).json({ error: "this environment has no subagents to run" });
-
-    const dir = (typeof req.body?.dir === "string" && req.body.dir.trim()) || env.dir;
-    let input = "";
-    let truncated = false;
-    try {
-      const r = await gitReview(dir);
-      truncated = r.truncated;
-      input += `Directory: ${dir}\n\ngit status --short:\n${r.status || "(clean)"}\n\n` +
-        `git diff HEAD${r.truncated ? " (TRUNCATED)" : ""}:\n${r.diff || "(no uncommitted changes)"}`;
-    } catch (err) {
-      input += `Directory: ${dir}\n(could not read a git diff: ${err.message})`;
+    if (!config.subagentsOfEnvironment(env.id).length) {
+      return res.status(400).json({ error: "this environment has no subagents to run" });
     }
-    if (req.body?.conversation) {
-      const conv = store.getConversation(req.body.conversation);
-      if (conv) {
-        const msgs = store.readMessages({ conversationId: conv.id, since: 0 }).slice(-30);
-        input += `\n\nConversation "${conv.title}" (recent):\n` +
-          msgs.map((m) => `${m.from}: ${m.content}`).join("\n");
-      }
-    }
-
     try {
-      const rc = config.readReviewerConfig?.() ?? {};
-      const { verdicts } = await runReview({
-        subagents,
-        input,
+      const { verdicts, truncated } = await runEnvironmentReview({
+        env,
+        conversationId: req.body?.conversation ?? null,
+        dir: req.body?.dir ?? null,
+        store, config, reviewer,
         resolveKey: resolveProviderKey,
-        defaults: {
-          provider: reviewer?.provider ?? null,
-          model: reviewer?.model ?? rc.model ?? null,
-          baseUrl: rc.baseUrl ?? null,
-        },
       });
       broadcast({ type: "subagent.review", environmentId: env.id, verdicts, truncated });
       res.json({ environmentId: env.id, verdicts, truncated });
@@ -1115,6 +1070,147 @@ export function mountRoutes(app, { store, broadcast, reviewer = null, config = n
       res.status(502).json({ error: err.message });
     }
   });
+
+  /* ---- Conversation ↔ subagents: run reviews from a conversation and post the
+   * verdicts INTO it (the supervision loop). Shared by the manual endpoint below
+   * and the task-done automation listener. ---- */
+
+  /** Environments of the conversation's project that actually have subagents. */
+  function reviewableEnvironments(conv) {
+    if (!config || !conv?.projectId) return [];
+    return config.environmentsOfProject(conv.projectId)
+      .filter((e) => config.subagentsOfEnvironment(e.id).length > 0);
+  }
+
+  /** Post an environment's verdicts into the conversation as "master" (delivered
+   *  directly, like /master/send): markdown summary + structured data so the UI
+   *  renders badges. `to` wakes the addressed agent's listener. */
+  function postVerdicts(conv, env, verdicts, to = []) {
+    const lines = verdicts.map((v) => `- **${v.subagent}**: ${v.decision} — ${v.reason || ""}`);
+    const content = `Revisión de subagentes — \`${env.name}\`\n${lines.join("\n")}`;
+    let msg = store.postMessage({
+      conversationId: conv.id,
+      from: "master",
+      content,
+      to: to.filter((n) => store.hasAgent(n)),
+      data: { kind: "review-verdicts", environmentId: env.id, verdicts },
+    });
+    if (msg.status === "pending") {
+      msg = store.approvePending(msg.id, {
+        decision: "approve", reason: "master (subagent review)", at: Date.now(), by: "master",
+      }) || msg;
+    }
+    broadcast({ type: "message.delivered", message: msg });
+    broadcast({ type: "subagent.review", environmentId: env.id, verdicts, conversationId: conv.id });
+    return msg;
+  }
+
+  api.post("/conversations/:id/review-subagents", async (req, res) => {
+    const conv = store.getConversation(req.params.id);
+    if (!conv) return res.status(404).json({ error: "conversation not found" });
+    if (!config) return res.status(409).json({ error: "no config store" });
+    let envs = reviewableEnvironments(conv);
+    const wanted = req.body?.environmentId;
+    if (wanted) envs = envs.filter((e) => e.id === wanted);
+    if (!envs.length) {
+      return res.status(409).json({
+        error: "no environments with subagents for this conversation (link it to a project and add subagents in the Agent graph)",
+      });
+    }
+    try {
+      const runs = [];
+      for (const env of envs) {
+        const { verdicts } = await runEnvironmentReview({
+          env, conversationId: conv.id, store, config, reviewer, resolveKey: resolveProviderKey,
+        });
+        postVerdicts(conv, env, verdicts, env.agentName ? [env.agentName] : []);
+        runs.push({ environmentId: env.id, verdicts });
+      }
+      res.json({ runs });
+    } catch (err) {
+      res.status(502).json({ error: err.message });
+    }
+  });
+
+  /* ---- Automation settings (persisted in config.json) ---- */
+  api.get("/automation", (_req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    res.json(config.getAutomation());
+  });
+  api.put("/automation", (req, res) => {
+    if (!config) return res.status(409).json({ error: "no config store" });
+    const cur = config.getAutomation();
+    const next = {
+      masterDraftOnMention: typeof req.body?.masterDraftOnMention === "boolean"
+        ? req.body.masterDraftOnMention : cur.masterDraftOnMention,
+      reviewOnTaskDone: typeof req.body?.reviewOnTaskDone === "boolean"
+        ? req.body.reviewOnTaskDone : cur.reviewOnTaskDone,
+    };
+    config.saveConfig({ automation: next });
+    broadcast({ type: "automation.updated", automation: next });
+    res.json(next);
+  });
+
+  /* ---- Master auto-drafts (in-memory: transient by nature; the UI fetches the
+   * pending draft when a conversation is selected). ---- */
+  const masterDrafts = new Map(); // conversationId → { text, replyTo, from, at }
+  api.get("/conversations/:id/master/draft", (req, res) => {
+    res.json({ draft: masterDrafts.get(req.params.id) ?? null });
+  });
+
+  /* ---- Automation listener: reacts to DELIVERED messages only (supervision
+   * stays the gate). Guards make loops impossible: master's own messages and
+   * verdict messages never re-trigger, and each environment runs one review at
+   * a time. Fail-safe: any error is logged and swallowed — automation must
+   * never affect message delivery. ---- */
+  const reviewsInFlight = new Set(); // environment ids
+  if (subscribe && config) {
+    subscribe(async (event) => {
+      if (event.type !== "message.delivered") return;
+      const m = event.message;
+      if (!m || m.from === "master") return; // never react to ourselves (drafts + verdicts)
+      if (m.data?.kind === "review-verdicts") return;
+      const conv = store.getConversation(m.conversationId);
+      if (!conv || conv.status !== "open") return;
+      const auto = config.getAutomation();
+
+      // 1) @master mention → compose a reply DRAFT for the human (never posted).
+      if (auto.masterDraftOnMention && Array.isArray(m.to) && m.to.includes("master") && reviewer?.available) {
+        try {
+          const transcript = masterTranscript(store.readMessages({ conversationId: conv.id, since: 0 }));
+          const locale = config.readConfig().locale ?? null;
+          const members = store.conversationMembers(conv.id).filter((n) => n !== "master");
+          const instruction =
+            `Agent "${m.from}" addressed you directly with this message:\n"${String(m.content || "").slice(0, 2000)}"\n` +
+            "Draft the master's reply to it.";
+          const text = await reviewerComplete(masterComposePrompt(conv, transcript, instruction, locale, members));
+          const draft = { text, replyTo: m.id, from: m.from, at: Date.now() };
+          masterDrafts.set(conv.id, draft);
+          broadcast({ type: "master.draft", conversationId: conv.id, ...draft });
+        } catch (err) {
+          process.stderr.write(`automation: master draft failed: ${err.message}\n`);
+        }
+      }
+
+      // 2) task-done → run the SENDER's environment review, post verdicts back.
+      if (auto.reviewOnTaskDone && isTaskDone(m)) {
+        const env = config.readEnvironments().find((e) => e.agentName === m.from);
+        if (!env || !config.subagentsOfEnvironment(env.id).length) return;
+        if (reviewsInFlight.has(env.id)) return; // one review per env at a time
+        reviewsInFlight.add(env.id);
+        try {
+          const { verdicts } = await runEnvironmentReview({
+            env, conversationId: conv.id, store, config, reviewer, resolveKey: resolveProviderKey,
+          });
+          postVerdicts(conv, env, verdicts, [m.from]);
+        } catch (err) {
+          process.stderr.write(`automation: task-done review failed (${env.name}): ${err.message}\n`);
+        } finally {
+          reviewsInFlight.delete(env.id);
+        }
+      }
+    });
+  }
 
   app.use("/api", api);
 }

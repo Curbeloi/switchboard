@@ -1,32 +1,28 @@
 ---
-source_hash: b935b9bf6a77b2be41d3103bd8064a0eb8821351
-generated_at: 2026-06-30T00:24:05.686Z
+source_hash: dd04dbad5d63787257b820a6ce53741e42584c9d
+generated_at: 2026-07-04T23:41:14.589Z
 ---
 # tests
 
 ## Purpose
-Unit and integration test suite for the switchboard relay, using Node's native test runner. Covers the four main subsystems (config store, message store, LLM reviewer, multi-agent orchestrator) plus two feature-specific areas (opencode auto-wake install logic, subagent config persistence).
+Node native test-runner suite covering the relay's core modules: message store, config store, LLM reviewer, multi-agent review orchestrator, subagent config, OpenCode wake-plugin install, and end-to-end automation (environment review runs).
 
 ## Key Components
-- `config.test.js` — tests `createConfigStore`: mode/policy/contracts persistence across restarts, file layout under a temp config dir.
-- `store.test.js` — tests `createStore`/`dmKeyFor`: message posting, read cursors, inbox counts, waiter resolution, DM channel naming.
-- `reviewer.test.js` — tests `createReviewer`/`REVIEWER_PROVIDERS`: approve/reject/escalate decisions, fetch stubbing for the Anthropic backend, fail-safe escalation on errors.
-- `orchestrator.test.js` — tests `runReview`: multi-agent orchestration logic, decision aggregation, per-agent throw handling via a mock `makeComplete` factory.
-- `subagents.test.js` — tests subagent config CRUD through `createConfigStore`: storing and retrieving per-environment subagent definitions.
-- `opencode-wake.test.js` — tests `opencodeWakePluginBody`/`installOpencode` from `src/install.js`: generated plugin file content, idempotent install, file existence checks.
+- automation.test.js — exercises `runEnvironmentReview`/`isTaskDone` from `review-run.js` against a real (temp-dir) config + message store, i.e. an integration test of the automated review pipeline.
+- config.test.js — unit tests for `createConfigStore` (persisted `~/.switchboard`-style config: mode, policy, contracts).
+- opencode-wake.test.js — tests `opencodeWakePluginBody` and `installOpencode` from `install.js`, verifying the OpenCode auto-wake plugin file is generated/installed correctly.
+- orchestrator.test.js — tests `runReview` from `relay/agents/orchestrator.js` using a fake "complete" agent stub with injectable throw/decision behavior, covering error and decision-branch paths.
+- reviewer.test.js — tests `createReviewer`/`REVIEWER_PROVIDERS` from `reviewer.js`, stubbing `fetch` to simulate the Anthropic API / CLI-backed reviewer backends.
+- store.test.js — unit tests for `createStore` and `dmKeyFor` (channels, membership, messages, DMs, read cursors).
+- subagents.test.js — tests subagent-related config persisted via `createConfigStore`.
 
 ## Exports / Public Interface
-None — test files only; executed via `pnpm test` or `node --test tests/<file>.test.js`.
+No exports — these are `node:test` test files run via `pnpm test` / `node --test tests/<file>`.
 
 ## Dependencies
-- `node:test`, `node:assert/strict` — native test runner
-- `node:fs`/`node:fs/promises`, `node:os`, `node:path` — temp directory setup and teardown
-- `node:child_process` (`execFileSync`) — used in opencode-wake tests to invoke CLI behavior
-- `../src/relay/config.js` — `createConfigStore`
-- `../src/relay/store.js` — `createStore`, `dmKeyFor`
-- `../src/relay/reviewer.js` — `createReviewer`, `REVIEWER_PROVIDERS`
-- `../src/relay/agents/orchestrator.js` — `runReview`
-- `../src/install.js` — `opencodeWakePluginBody`, `installOpencode`
+`node:test`, `node:assert/strict`, `node:fs`/`node:fs/promises`, `node:os`, `node:path`, `node:child_process`; and the modules under test: `src/relay/review-run.js`, `src/relay/config.js`, `src/relay/store.js`, `src/relay/reviewer.js`, `src/relay/agents/orchestrator.js`, `src/install.js`.
 
 ## Notes
-Each test file creates isolated state via `mkdtempSync`/`mkdtemp` temp directories and cleans up with `rmSync`/`rm` — no shared global state between tests. The orchestrator tests use a `makeComplete` mock factory that can simulate per-agent throws and inject decisions, isolating orchestration logic from real LLM calls. Reviewer tests stub `fetch` directly to avoid network calls.
+- Tests favor real, isolated state over mocks: most create a fresh temp dir (`mkdtempSync`/`mkdtemp` + `tmpdir()`) per test and a real `createConfigStore`/`createStore` instance, cleaning up with `rmSync`/`rm`.
+- External calls (LLM reviewer HTTP, agent execution) are stubbed at the boundary (`fetch` stub in reviewer.test.js, fake `complete` agent in orchestrator.test.js) rather than mocking internal modules.
+- File naming maps 1:1 to the module under test (`store.test.js` ↔ `store.js`, etc.), except `automation.test.js`, which is a cross-module integration test rather than a single-unit test.

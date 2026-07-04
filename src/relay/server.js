@@ -65,7 +65,7 @@ export async function startRelay({
   // addable to conversations even before they're started).
   for (const e of config.readEnvironments()) agents.registerIdentity(e.agentName);
 
-  mountRoutes(app, { store, broadcast, reviewer, config, agents });
+  mountRoutes(app, { store, broadcast, subscribe, reviewer, config, agents });
 
   /* In "llm" mode, the reviewer drains the pending queue automatically:
    *  approve/reject deliver or drop the message; escalate leaves it pending

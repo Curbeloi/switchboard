@@ -203,6 +203,15 @@ export function createConfigStore(dir = DEFAULT_CONFIG_DIR) {
     const e = readConfig().engine;
     return VALID_ENGINES.has(e) ? e : DEFAULT_ENGINE;
   }
+  /** Automation toggles (persisted in config.json under `automation`). Both
+   *  default ON; the supervisor can switch them off in ⚙ Settings. */
+  function getAutomation() {
+    const a = readConfig().automation ?? {};
+    return {
+      masterDraftOnMention: a.masterDraftOnMention !== false,
+      reviewOnTaskDone: a.reviewOnTaskDone !== false,
+    };
+  }
   function readJsonArray(path) {
     if (!existsSync(path)) return [];
     try {
@@ -438,6 +447,7 @@ export function createConfigStore(dir = DEFAULT_CONFIG_DIR) {
     readReviewerConfig,
     saveReviewerConfig,
     getEngine,
+    getAutomation,
     readProjects,
     getProject,
     addProject,
