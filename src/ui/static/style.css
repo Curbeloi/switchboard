@@ -16,6 +16,25 @@
   animation: sb-fade 0.12s ease-out;
 }
 .overlay[hidden] { display: none; }
+
+/* Modal dialog layer (styled replacement for native alert/confirm/prompt).
+ * Separate from .overlay and stacked ABOVE it (z-index 60) so a confirm can
+ * open on top of Settings or the wizard. Centered vertically (small dialogs). */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  z-index: 60;
+  animation: sb-fade 0.12s ease-out;
+}
+.modal .panel { max-width: 420px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px; }
 @keyframes sb-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes sb-pop { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: none; } }
 
