@@ -1,7 +1,7 @@
 {
   "name": "@icurbe/switchboard",
-  "version": "3.4.0",
-  "description": "Supervised inter-agent messaging relay for Claude Code (and any MCP client). Named identities, channels with focused conversations (threads), per-conversation state docs (PROGRESS.md), single-pane supervision UI with manual-approval mode.",
+  "version": "4.0.0",
+  "description": "Supervised inter-agent messaging relay for Claude Code and OpenCode (and any MCP client). Projects, environments with web consoles, focused conversations with state docs (PROGRESS.md), LangGraph review subagents, multi-provider LLM supervision, single-pane supervision UI.",
   "type": "module",
   "main": "src/index.js",
   "bin": {
@@ -47,8 +47,16 @@
     "node": ">=22"
   },
   "packageManager": "pnpm@10.12.1",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@homebridge/node-pty-prebuilt-multiarch"
+    ]
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.97.1",
+    "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
+    "@langchain/core": "^1.2.1",
+    "@langchain/langgraph": "^1.4.7",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "ajv": "^8.20.0",
     "express": "^4.21.0",
@@ -56,6 +64,9 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "cytoscape": "3.30.2",
     "tailwindcss": "^3.4.0"
   }
 }

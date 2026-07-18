@@ -94,8 +94,9 @@ function parseDecision(text) {
   }
 }
 
-/** Turn raw model text into a normalized decision, escalating if unparseable. */
-function decisionFrom(text, label) {
+/** Turn raw model text into a normalized decision, escalating if unparseable.
+ *  Exported so the subagent orchestrator reuses the same parse + fail-safe. */
+export function decisionFrom(text, label) {
   const parsed = text != null ? parseDecision(text) : null;
   if (!parsed) return { decision: "escalate", reason: `${label} returned no parseable decision` };
   return {
@@ -152,6 +153,79 @@ function userPrompt(message) {
 
 const UNAVAILABLE = { available: false, backend: null, model: null, provider: null, review: null };
 
+/* ---- OpenAI endpoint shim --------------------------------------------------
+ * Some OpenAI models (the reasoning/codex ones: gpt-5-codex, o1-pro, o3-pro,
+ * gpt-5-pro, …) are served ONLY by the newer /v1/responses endpoint and 404 on
+ * the legacy /v1/chat/completions with "Use the v1/responses endpoint instead."
+ * We call chat/completions first (cheapest, still right for gpt-4o/4.1/mini/…)
+ * and, on that specific 404, transparently retry against /v1/responses — then
+ * memoize the model so later calls skip the doomed first attempt. Both paths
+ * return plain text; callers parse JSON out of it exactly as before. */
+const OPENAI_RESPONSES_ONLY = new Set();
+
+function openaiNeedsResponses(detail) {
+  return /v1\/responses/i.test(detail) || /not supported in the v1\/chat\/completions/i.test(detail);
+}
+
+/** Pull the assistant text out of a /v1/responses body (skips reasoning items). */
+function openaiResponsesText(body) {
+  if (typeof body?.output_text === "string" && body.output_text.trim()) return body.output_text.trim();
+  const parts = [];
+  for (const item of body?.output ?? []) {
+    if (item?.type !== "message") continue;
+    for (const c of item.content ?? []) {
+      if (c?.type === "output_text" && typeof c.text === "string") parts.push(c.text);
+    }
+  }
+  return parts.join("").trim();
+}
+
+async function openaiViaResponses({ key, model, system, user, maxTokens, json }) {
+  const body = {
+    model,
+    // Reasoning models spend their output budget on hidden reasoning tokens, so a
+    // tight cap can yield an empty answer — give generous room on this path.
+    max_output_tokens: Math.max(maxTokens, 4096),
+    input: user,
+  };
+  if (system) body.instructions = system;
+  if (json) body.text = { format: { type: "json_object" } };
+  const r = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error(`openai HTTP ${r.status}: ${(await r.text().catch(() => "")).slice(0, 300)}`);
+  return openaiResponsesText(await r.json());
+}
+
+/** Single entry point for OpenAI text completion, with chat→responses fallback. */
+async function openaiComplete({ key, model, system, user, maxTokens, json }) {
+  if (!key) throw new Error("no OpenAI key configured");
+  if (OPENAI_RESPONSES_ONLY.has(model)) return openaiViaResponses({ key, model, system, user, maxTokens, json });
+  const r = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      model,
+      // Newer chat models reject `max_tokens`; `max_completion_tokens` is accepted by all current ones.
+      max_completion_tokens: maxTokens,
+      ...(json ? { response_format: { type: "json_object" } } : {}),
+      messages: [
+        ...(system ? [{ role: "system", content: system }] : []),
+        { role: "user", content: user },
+      ],
+    }),
+  });
+  if (r.ok) return ((await r.json())?.choices?.[0]?.message?.content ?? "").trim();
+  const detail = (await r.text().catch(() => "")).slice(0, 300);
+  if ((r.status === 404 || r.status === 400) && openaiNeedsResponses(detail)) {
+    OPENAI_RESPONSES_ONLY.add(model);
+    return openaiViaResponses({ key, model, system, user, maxTokens, json });
+  }
+  throw new Error(`openai HTTP ${r.status}: ${detail}`);
+}
+
 /**
  * Freeform text completion over a concrete provider — used by the "master"
  * supervisor mediator (compose a message / analyze a conversation). Parallel to
@@ -177,23 +251,15 @@ export async function complete(provider, { key, baseUrl, model, system, user } =
       const b = await r.json();
       return (b.content || []).filter((c) => c.type === "text").map((c) => c.text).join("").trim();
     }
-    case "openai": {
-      if (!key) throw new Error("no OpenAI key configured");
-      const r = await fetch("https://api.openai.com/v1/chat/completions", {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
-        body: JSON.stringify({
-          model: model || REVIEWER_PROVIDERS.openai.defaultModel,
-          // Newer OpenAI models reject `max_tokens`; `max_completion_tokens` is the
-          // forward-compatible field accepted by all current chat models.
-          max_completion_tokens: MAX,
-          messages: [{ role: "system", content: system }, { role: "user", content: user }],
-        }),
+    case "openai":
+      return openaiComplete({
+        key,
+        model: model || REVIEWER_PROVIDERS.openai.defaultModel,
+        system,
+        user,
+        maxTokens: MAX,
+        json: false,
       });
-      if (!r.ok) throw new Error(`openai HTTP ${r.status}: ${(await r.text().catch(() => "")).slice(0, 300)}`);
-      const b = await r.json();
-      return (b?.choices?.[0]?.message?.content ?? "").trim();
-    }
     case "gemini": {
       if (!key) throw new Error("no Gemini key configured");
       const m = model || REVIEWER_PROVIDERS.gemini.defaultModel;
@@ -428,27 +494,16 @@ export function createReviewer(initialConfig = {}) {
   function makeOpenAI(apiKey, model) {
     const review = async (message) => {
       try {
-        const res = await fetch("https://api.openai.com/v1/chat/completions", {
-          method: "POST",
-          headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify({
-            model,
-            // Newer OpenAI models reject `max_tokens`; use `max_completion_tokens`.
-            max_completion_tokens: 512,
-            // Omit `temperature`: newer models only accept the default (1) and 400 on 0.
-            response_format: { type: "json_object" },
-            messages: [
-              { role: "system", content: rubric },
-              { role: "user", content: userPrompt(message) },
-            ],
-          }),
+        // Omit `temperature`: newer models only accept the default (1) and 400 on 0.
+        const text = await openaiComplete({
+          key: apiKey,
+          model,
+          system: rubric,
+          user: userPrompt(message),
+          maxTokens: 512,
+          json: true,
         });
-        if (!res.ok) {
-          const detail = (await res.text().catch(() => "")).slice(0, 200);
-          return { decision: "escalate", reason: `reviewer (openai) HTTP ${res.status}${detail ? `: ${detail}` : ""}` };
-        }
-        const body = await res.json();
-        return decisionFrom(body?.choices?.[0]?.message?.content, "reviewer (openai)");
+        return decisionFrom(text, "reviewer (openai)");
       } catch (err) {
         return { decision: "escalate", reason: `reviewer (openai) error: ${err.message}` };
       }

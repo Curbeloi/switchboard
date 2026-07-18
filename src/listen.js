@@ -50,17 +50,17 @@ export async function runListen({
   intervalMs = 10000,
   all = false,
   once = false,
-  channels = [],
+  conversations = [],
   exclude = [],
 } = {}) {
   if (!agent) throw new Error("--agent NAME is required");
   const base = relayUrl.replace(/\/+$/, "");
 
-  // Channel scoping: an allowlist (only these wake you) and/or a denylist
-  // (never these). Applied in poll() after the membership check, so it narrows
-  // the wakeup WITHOUT touching membership/inbox — and survives the auto-join
-  // that re-adds you when someone DMs/@mentions you.
-  const allow = new Set(channels);
+  // Conversation scoping: an allowlist (only these wake you) and/or a denylist
+  // (never these), by conversation id. Applied in poll() after the membership
+  // check, so it narrows the wakeup WITHOUT touching membership/inbox — and
+  // survives the auto-join that re-adds you when someone DMs/@mentions you.
+  const allow = new Set(conversations);
   const deny = new Set(exclude);
 
   // once: resume from the persisted watermark (gapless). Otherwise seed to now.
@@ -68,7 +68,7 @@ export async function runListen({
   if (once) saveWatermark(agent, base, since);
 
   const scope = all
-    ? "all messages in your channels"
+    ? "all messages in your conversations"
     : "messages addressed to you (mentions + DMs)";
   const filt = allow.size ? ` only in {${[...allow].join(", ")}}` : "";
   const excl = deny.size ? ` excluding {${[...deny].join(", ")}}` : "";
@@ -84,38 +84,48 @@ export async function runListen({
     return res.json();
   }
 
+  /** projectId → project name, to label wakeups by project (best-effort). */
+  async function projectNames() {
+    try {
+      const projects = await getJson("/api/projects");
+      return new Map((projects || []).map((p) => [p.id, p.name]));
+    } catch {
+      return new Map();
+    }
+  }
+
   async function poll() {
-    const apiChannels = await getJson("/api/channels");
+    // Conversations carry their members (no token needed); poll each one we
+    // belong to for delivered messages since the watermark.
+    const convs = await getJson("/api/conversations?status=all");
     let maxSeen = since;
     const hits = [];
-    for (const ch of apiChannels) {
-      const members = Array.isArray(ch.members) ? ch.members : [];
-      if (!members.includes(agent)) continue; // only channels we belong to
-      if (allow.size && !allow.has(ch.name)) continue; // allowlist: only these
-      if (deny.has(ch.name)) continue; // denylist: never these
-      const isMyDm = ch.name.startsWith("dm:");
-      // Messages live in conversations (v3+); enumerate every conversation in the
-      // channel and poll its delivered messages. (The pre-v3 channel-messages
-      // endpoint is gone — hitting it returned 410 and broke wake detection.)
-      const convs = await getJson(
-        `/api/channels/${encodeURIComponent(ch.name)}/conversations?status=all`
+    for (const conv of convs) {
+      const members = Array.isArray(conv.members) ? conv.members : [];
+      if (!members.includes(agent)) continue; // only conversations we belong to
+      if (allow.size && !allow.has(conv.id)) continue; // allowlist: only these
+      if (deny.has(conv.id)) continue; // denylist: never these
+      const msgs = await getJson(
+        `/api/conversations/${encodeURIComponent(conv.id)}/messages?since=${since}`
       );
-      for (const conv of convs) {
-        const msgs = await getJson(
-          `/api/conversations/${encodeURIComponent(conv.id)}/messages?since=${since}`
-        );
-        for (const m of msgs) {
-          if (m.createdAt > maxSeen) maxSeen = m.createdAt;
-          if (m.from === agent) continue; // ignore our own posts
-          const addressed = (Array.isArray(m.to) && m.to.includes(agent)) || isMyDm;
-          if (all || addressed) hits.push(m);
-        }
+      for (const m of msgs) {
+        if (m.createdAt > maxSeen) maxSeen = m.createdAt;
+        if (m.from === agent) continue; // ignore our own posts
+        const addressed = (Array.isArray(m.to) && m.to.includes(agent)) || conv.isDm;
+        if (all || addressed) hits.push({ m, conv });
       }
     }
-    hits.sort((a, b) => a.createdAt - b.createdAt);
-    for (const m of hits) {
+    hits.sort((a, b) => a.m.createdAt - b.m.createdAt);
+    // Tell the agent EXACTLY where to look: project + conversation title + id, so
+    // on wake it can agent_read(id) and reply without first hunting for the thread.
+    const projById = hits.length ? await projectNames() : new Map();
+    for (const { m, conv } of hits) {
       const preview = String(m.content || "").replace(/\s+/g, " ").slice(0, 200);
-      process.stdout.write(`[switchboard] ${m.from} → ${m.channel}: ${preview}\n`);
+      const proj = conv.projectId ? projById.get(conv.projectId) : null;
+      const where = `"${conv.title}"${proj ? ` · project ${proj}` : ""}`;
+      process.stdout.write(
+        `[switchboard] new message from ${m.from} in ${where} — read & reply with agent_read("${conv.id}"): ${preview}\n`
+      );
     }
     if (maxSeen > since) since = maxSeen;
     return hits;
