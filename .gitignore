@@ -13,3 +13,6 @@ CLAUDE.md
 
 # sdd-kit cache
 .sdd/
+
+.idea/
+.vscode/
