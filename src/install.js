@@ -1,7 +1,7 @@
 import { readFile, writeFile, mkdir, rm, access } from "node:fs/promises";
 import { constants } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 
 const DEFAULT_RELAY = "http://127.0.0.1:8765";
 const REPO = "https://github.com/Curbeloi/switchboard";
@@ -54,35 +54,35 @@ mode (the default) your messages wait there for approval before delivery.
 
 Repo: ${REPO}
 
-## The mental model: channels and conversations
+## The mental model: conversations
 
-- A **channel** is a long-lived room for a team/project (members, never deleted lightly).
-- A **conversation** (thread) is a sub-stream inside a channel scoped to **one task or loop**: own title, purpose, success criteria, **own state doc (PROGRESS.md)**, own message stream. Multiple conversations can be open in the same channel at once.
-- **Every loop should live in its own conversation.** When the task's success criteria is met, **close the conversation** and (if needed) open a new one for the next task. This keeps the inbox focused on what's actually active.
+- A **conversation** is the room: it has **members**, its own **message stream**, its own **state doc (PROGRESS.md)**, and an optional governing **contract**. It is scoped to **one task or loop**.
+- There is no "channel" layer — a conversation IS the unit you join, post into, and wait on. A **DM** is just the canonical 1:1 conversation between two agents (auto-created on first DM, lives forever).
+- **Every loop should live in its own conversation.** When the success criteria is met, **close the conversation** and (if needed) open a new one for the next task. This keeps the inbox focused on what's actually active.
 
 ## When to use the tools
 
-- Find out who else is online / what channels and conversations exist → \`agent_list_agents\`, \`agent_list_channels\`, \`agent_conversation_list\`.
-- Start a new task that should have its own thread → \`agent_conversation_start(channel, title, purpose?, successCriteria?)\`.
-- The user asks you to tell / notify / ask another agent something → \`agent_send\` (defaults to the channel's most recently opened conversation) or \`agent_dm\` (1:1; DM has a perpetual default conversation).
-- Address a specific agent inside a shared channel → \`agent_send\` with \`to\` (like an @mention).
+- Find out who else is online / what conversations exist → \`agent_list_agents\`, \`agent_conversation_list\`.
+- Start a new task that should have its own thread → \`agent_conversation_start(title, purpose?, successCriteria?, members?)\`.
+- The user asks you to tell / notify / ask another agent something → \`agent_send(conversation, content, to?)\` or \`agent_dm(to, content)\` (1:1).
+- Address a specific member of a conversation → \`agent_send\` with \`to\` (like an @mention).
 - You expect a reply or suspect there's something to read → \`agent_inbox\` (grouped by conversation), then \`agent_read\`.
 - You want to wait for a reply right now → \`agent_wait\` (pass a \`conversation\` to scope tightly).
+- **You finished a task** → post a message that includes the literal marker \`[task-done]\` (or structured \`data: {"task_status": "done"}\`). The relay then runs this environment's review subagents over your work and replies IN the conversation with their verdicts: on approve, continue; on reject, fix what they flagged and post \`[task-done]\` again; on escalate, wait for the human supervisor.
 - The task is done (checker approved, criteria met) → \`agent_conversation_close(conversation, outcome?)\`.
 
 ## Tools
 
 - \`agent_list_agents()\` — the other agents currently connected.
-- \`agent_list_channels()\` — channels and their members.
-- \`agent_send(channel, content, to?, conversation?)\` — post into a channel. Without \`conversation\`, goes to the most recently opened thread. \`to\` (name or list) tags @mentions.
-- \`agent_dm(to, content)\` — direct message; canonical 2-member channel; default conversation auto-created.
+- \`agent_conversation_list(status?)\` — list conversations (\`open\` | \`closed\` | \`all\`; default \`open\`) with their members and message counts. Use it to discover a conversation to join or to browse history.
+- \`agent_conversation_start(title, purpose?, successCriteria?, members?)\` — open a new conversation for a focused task. You're added automatically; pass \`members\` to invite specific agents. Optionally pass \`contract\` to govern it.
+- \`agent_send(conversation, content, to?)\` — post into a conversation. \`to\` (name or list) tags @mentions; pass \`"master"\` to reach the human supervisor.
+- \`agent_dm(to, content)\` — direct message; resolves (or creates) the canonical 1:1 conversation with that agent.
 - \`agent_inbox()\` — unread messages **grouped by conversation** (closed conversations don't appear).
-- \`agent_read(channel?, conversation?, since?)\` — read a thread. Pass \`conversation\` directly when you have it, or \`channel\` to read its latest open thread.
-- \`agent_wait(channel?, conversation?, timeout_ms?)\` — block until a new message arrives.
-- \`agent_join(channel)\` / \`agent_leave(channel)\` — channel membership.
-- \`agent_conversation_start(channel, title, purpose?, successCriteria?)\` — open a new thread for a focused task. The new thread immediately becomes the default for \`agent_send\` in that channel.
-- \`agent_conversation_list(channel, status?)\` — list threads (\`open\` | \`closed\` | \`all\`; default \`open\`).
-- \`agent_conversation_close(conversation, outcome?)\` — close a thread when its goal is met.
+- \`agent_read(conversation, since?)\` — read a conversation's messages and mark it read.
+- \`agent_wait(conversation?, timeout_ms?)\` — block until a new message arrives (omit \`conversation\` to watch all of yours).
+- \`agent_join(conversation)\` / \`agent_leave(conversation)\` — conversation membership (controls your inbox + wakeups).
+- \`agent_conversation_close(conversation, outcome?)\` — close a conversation when its goal is met.
 - \`agent_state_read(conversation)\` — read the conversation's state doc (its \`PROGRESS.md\` — what's been done, what's in progress, decisions). Persisted; survives restarts.
 - \`agent_state_write(conversation, content)\` — replace the state doc atomically. Read first, edit, write — this is the loop's memory.
 
@@ -90,12 +90,12 @@ Repo: ${REPO}
 
 A long task that survives across sessions needs **state**, not just messages. The
 state doc on the **conversation** is your \`PROGRESS.md\`: persisted in SQLite,
-shared by every agent in the channel, scoped to this one task.
+shared by every member of the conversation, scoped to this one task.
 
 1. **Open a conversation** (\`agent_conversation_start\`) with a clear \`purpose\` and a checkable \`successCriteria\`. Write it down — that's the stop condition.
 2. **Read the state doc** at the start of every turn (\`agent_state_read\`). Without it, wake-ups start from zero.
-3. Do the work; post a message describing what changed (\`agent_send\` — defaults to this conversation).
-4. **Let a checker verify** — either a separate agent in the channel acting as reviewer, or the relay's \`llm\` mode (the supervision reviewer is your gate; any reviewer error escalates to a human, never auto-approves). Don't grade your own homework.
+3. Do the work; post a message describing what changed (\`agent_send\` into this conversation).
+4. **Let a checker verify** — either a separate agent in the conversation acting as reviewer, or the relay's \`llm\` mode (the supervision reviewer is your gate; any reviewer error escalates to a human, never auto-approves). Don't grade your own homework.
 5. On approval, **update the state doc** (\`agent_state_write\`): move the item from "In progress" to "Done"; write the next step under "Next".
 6. Loop until a **real** stop condition: tests pass, the checker approves a final deliverable, or the state doc records \`STATUS: done\`.
 7. **Close the conversation** (\`agent_conversation_close\`) with an \`outcome\` describing the result. The thread is archived and stops cluttering the inbox.
@@ -144,7 +144,7 @@ the \`dsp.v1\` contract filled (the relay validates the schema; the reviewer
 judges intent):
 
 \`\`\`
-agent_send("team", "Migration ready: adds idx_users_email; no FK changes",
+agent_send(conversation, "Migration ready: adds idx_users_email; no FK changes",
   contract: "dsp.v1",
   data: {
     decision_type: "BOUNDARY",
@@ -178,8 +178,8 @@ switchboard listen --agent ${agent} --once
 
 It blocks until the next message addressed to you arrives, prints it, and **exits**.
 Because you launched it as a background task, its exit **wakes you**. On waking:
-\`agent_read\` the channel(s) to read the real messages, reply, then **relaunch the
-same \`--once\` command** in the background to keep listening. That loop is
+\`agent_read\` the conversation(s) to read the real messages, reply, then **relaunch
+the same \`--once\` command** in the background to keep listening. That loop is
 event-driven auto-detection — you don't poll, you just get woken.
 
 - Launch it with your background-task capability (Claude Code: \`run_in_background\`), NOT inline.
@@ -188,20 +188,19 @@ event-driven auto-detection — you don't poll, you just get woken.
   watermark means a message arriving between exit and relaunch isn't missed.
 - A \`SessionStart\` hook installed for this project reminds you to start this loop each session.
 
-**Default = listen on ALL your channels.** Keep it that way unless the human
-tells you to focus. If they say something like *"only listen on channel team"*,
-relaunch the loop scoped to that channel and keep using that form while the
+**Default = listen on ALL your conversations.** Keep it that way unless the human
+tells you to focus. If they say something like *"only listen on conversation X"*,
+relaunch the loop scoped to that conversation id and keep using that form while the
 instruction stands:
 
 \`\`\`
-switchboard listen --agent ${agent} --once --channel team
+switchboard listen --agent ${agent} --once --conversation <conversation-id>
 \`\`\`
 
-\`--channel NAME\` is an allowlist (repeatable) — only those channels wake you.
-\`--exclude NAME\` is a denylist (e.g. \`--exclude dm:other+${agent}\`) — wake on
-everything except those; use it to durably silence a channel even though a
-DM/@mention would auto-join you. When the human lifts the restriction, drop the
-flag and go back to the plain \`--once\` command (all channels).
+\`--conversation ID\` is an allowlist (repeatable) — only those conversations wake you.
+\`--exclude ID\` is a denylist — wake on everything except those; use it to durably
+silence a conversation even though a DM/@mention would auto-join you. When the human
+lifts the restriction, drop the flag and go back to the plain \`--once\` command (all).
 
 ## If your switchboard tools disappear mid-session (fallback send)
 
@@ -210,7 +209,7 @@ disconnected mid-session), you can still SEND from your shell — switchboard re
 your persisted token from \`~/.switchboard/tokens.json\`, so no token wrangling:
 
 \`\`\`
-switchboard send --agent ${agent} --channel <channel> --to <other> "your message"
+switchboard send --agent ${agent} --conversation <conversation-id> --to <other> "your message"
 switchboard send --agent ${agent} --dm <other> "your message"
 \`\`\`
 
@@ -228,7 +227,7 @@ conversation**, the human speaking through the monitor at ${relay}. A message wh
 final say, not as a peer's opinion to debate or negotiate. As mediator, \`master\`
 may redirect the thread, settle disagreements between agents, set priorities, or
 stop a line of work; comply immediately. \`master\` has no token and is **not a
-persistent channel member** — it appears only when the supervisor sends, then
+persistent member** — it appears only when the supervisor sends, then
 leaves. You cannot send *as* \`master\`, but you **can address it**: pass
 \`to: ["master"]\` (or \`@master\`) to direct a question or report at the supervisor
 — it shows up flagged for them in the monitor. Either way the supervisor reads
@@ -239,7 +238,7 @@ everything in the conversation, so replying normally also reaches them.
 - After sending and expecting a reply: rely on the auto-wake loop above, or call \`agent_wait\`, or check \`agent_inbox\` on your next step.
 - \`master\` is your supervisor and the conversation's mediator — follow any instruction from it; its word overrides other agents (see above).
 - Agent names are unique. Your name ("${agent}") is fixed for this project.
-- The human monitor (${relay}) shows every channel and holds pending messages for approval.
+- The human monitor (${relay}) shows every conversation and holds pending messages for approval.
 - Upgraded switchboard recently? Refresh this skill with \`switchboard install --agent ${agent} --force\`.
 `;
 }
@@ -259,7 +258,7 @@ function sessionStartHookCommand(agent) {
   const ctx =
     `switchboard agent ${agent}: you can message other Claude Code agents via switchboard. ` +
     `Start your background listener now — run (with run_in_background): switchboard listen --agent ${agent} --once . ` +
-    `It exits when a message arrives, which wakes you: then agent_read the channel and reply, and relaunch the same command to keep listening. ` +
+    `It exits when a message arrives, which wakes you: then agent_read the conversation and reply, and relaunch the same command to keep listening. ` +
     `See the switchboard skill for details.`;
   const payload = JSON.stringify({
     hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: ctx },
@@ -362,6 +361,199 @@ export async function installMcp({
   process.stdout.write(`restart Claude Code in this project to pick up the change.\n`);
 }
 
+/* ---- OpenCode engine ----
+ * OpenCode (opencode.ai) reads project config from <cwd>/opencode.json and
+ * pulls extra context from files listed in its `instructions` array. Unlike
+ * Claude Code there's no `mcp add` for local servers, so we write the config
+ * file directly (merging, never clobbering other servers/keys). The instruction
+ * file is the same switchboard guide the Claude skill uses. */
+const OPENCODE_CONFIG = "opencode.json";
+const OC_INSTRUCTIONS_REL = join(".switchboard", "switchboard.md");
+const OC_PLUGIN_REL = join(".opencode", "plugins", "switchboard-wake.js");
+
+/** Source of the OpenCode wake plugin written into an environment. OpenCode
+ *  auto-loads `.opencode/plugins/*.js`, so dropping this file makes the agent
+ *  react to messages on its own — the OpenCode counterpart of Claude's
+ *  `switchboard listen` background wake. It polls the relay's READ-ONLY
+ *  endpoints (no token, never advances read cursors — detection decoupled from
+ *  consumption, mirroring `src/listen.js`) and, on a new message addressed to
+ *  the agent, injects a turn via the OpenCode SDK so the agent reads + replies.
+ *  Self-contained: imports nothing from switchboard. `agent`/`relay` are baked
+ *  in as JSON literals. Fail-safe: every fetch/inject error is swallowed and
+ *  retried next tick; it never throws out of the interval. */
+export function opencodeWakePluginBody({ agent, relay }) {
+  const AGENT = JSON.stringify(agent);
+  const RELAY = JSON.stringify(relay);
+  return `// switchboard-wake.js — auto-generated by switchboard. Do not edit by hand.
+// Wakes this OpenCode agent when a switchboard message is addressed to it:
+// polls the relay's read-only endpoints and injects a turn so the agent reads
+// and replies on its own (the OpenCode equivalent of \`switchboard listen\`).
+export const SwitchboardWake = async ({ client }) => {
+  const AGENT = ${AGENT};
+  const BASE = (${RELAY}).replace(/\\/+$/, "");
+  const INTERVAL_MS = 5000;
+  let since = Date.now();
+  let activeSession = null;
+  let busy = false;
+
+  async function getJson(path) {
+    const res = await fetch(BASE + path);
+    if (!res.ok) throw new Error(path + " -> " + res.status);
+    return res.json();
+  }
+
+  async function projectNames() {
+    try {
+      const projects = await getJson("/api/projects");
+      const map = new Map();
+      for (const p of projects || []) map.set(p.id, p.name);
+      return map;
+    } catch {
+      return new Map();
+    }
+  }
+
+  // Resolve the session to inject into: prefer the id captured from events,
+  // else the most recently updated session the SDK reports.
+  async function resolveSession() {
+    if (activeSession) return activeSession;
+    try {
+      const r = await client.session.list();
+      const list = Array.isArray(r) ? r : (r && r.data) || [];
+      let best = null;
+      let bestT = -1;
+      for (const s of list) {
+        const t = (s && s.time && (s.time.updated || s.time.created)) || s.updated || s.created || 0;
+        if (t >= bestT) { bestT = t; best = s; }
+      }
+      activeSession = (best && best.id) || null;
+    } catch {
+      /* ignore — retry next tick */
+    }
+    return activeSession;
+  }
+
+  async function inject(text) {
+    const id = await resolveSession();
+    if (!id) return;
+    try {
+      await client.session.promptAsync({ path: { id: id }, body: { parts: [{ type: "text", text: text }] } });
+    } catch {
+      /* fire-and-forget: opencode queues if the agent is busy */
+    }
+  }
+
+  async function poll() {
+    if (busy) return;
+    busy = true;
+    try {
+      let convs;
+      try { convs = await getJson("/api/conversations?status=all"); }
+      catch { return; }
+      let maxSeen = since;
+      const hits = [];
+      for (const conv of convs || []) {
+        const members = Array.isArray(conv.members) ? conv.members : [];
+        if (!members.includes(AGENT)) continue; // only conversations we belong to
+        let msgs;
+        try { msgs = await getJson("/api/conversations/" + encodeURIComponent(conv.id) + "/messages?since=" + since); }
+        catch { continue; }
+        for (const m of msgs || []) {
+          if (m.createdAt > maxSeen) maxSeen = m.createdAt;
+          if (m.from === AGENT) continue; // never wake on our own posts (no loops)
+          const addressed = (Array.isArray(m.to) && m.to.includes(AGENT)) || conv.isDm;
+          if (addressed) hits.push({ m: m, conv: conv });
+        }
+      }
+      if (maxSeen > since) since = maxSeen;
+      hits.sort((a, b) => a.m.createdAt - b.m.createdAt);
+      const projById = hits.length ? await projectNames() : new Map();
+      for (const hit of hits) {
+        const m = hit.m, conv = hit.conv;
+        const preview = String(m.content || "").replace(/\\s+/g, " ").slice(0, 200);
+        const proj = conv.projectId ? projById.get(conv.projectId) : null;
+        const where = '"' + conv.title + '"' + (proj ? " - project " + proj : "");
+        await inject("[switchboard] new message from " + m.from + " in " + where +
+          ' - read & reply with agent_read("' + conv.id + '"): ' + preview);
+      }
+    } finally {
+      busy = false;
+    }
+  }
+
+  const timer = setInterval(() => { poll().catch(() => {}); }, INTERVAL_MS);
+  if (timer && typeof timer.unref === "function") timer.unref();
+
+  // Capture the active session id from the event stream (shape varies; the
+  // session.list() fallback above covers the cases this misses).
+  return {
+    event: async (input) => {
+      const e = (input && input.event) || input || {};
+      const props = e.properties || {};
+      const sid = props.sessionID || e.sessionID ||
+        (props.info && props.info.sessionID) ||
+        (props.info && props.info.id) || null;
+      if (sid) activeSession = sid;
+    },
+  };
+};
+`;
+}
+
+export async function installOpencode({
+  agent,
+  relay = DEFAULT_RELAY,
+  cwd = process.cwd(),
+  force = false,
+} = {}) {
+  if (!agent) throw new Error("--agent NAME is required");
+
+  // 1) Merge our MCP server + instruction reference into opencode.json.
+  const cfgPath = join(cwd, OPENCODE_CONFIG);
+  const cfg = (await readJsonOr(cfgPath, null)) ?? {};
+  cfg.$schema ??= "https://opencode.ai/config.json";
+  cfg.mcp = cfg.mcp && typeof cfg.mcp === "object" ? cfg.mcp : {};
+  cfg.mcp.switchboard = {
+    type: "local",
+    command: ["switchboard", "mcp", "--agent", agent, "--relay", relay],
+    enabled: true,
+  };
+  cfg.instructions = Array.isArray(cfg.instructions) ? cfg.instructions : [];
+  if (!cfg.instructions.includes(OC_INSTRUCTIONS_REL)) cfg.instructions.push(OC_INSTRUCTIONS_REL);
+  await writeFile(cfgPath, JSON.stringify(cfg, null, 2) + "\n", "utf8");
+
+  // 2) Write the instruction file (the switchboard guide), unless present.
+  const instrPath = join(cwd, OC_INSTRUCTIONS_REL);
+  let created = false;
+  if (force || !(await fileExists(instrPath))) {
+    await mkdir(dirname(instrPath), { recursive: true });
+    await writeFile(instrPath, skillBody({ agent, relay }), "utf8");
+    created = true;
+  }
+
+  // 3) Write the wake plugin so the agent reacts to messages on its own
+  //    (OpenCode auto-loads .opencode/plugins/*.js). Idempotent like the skill.
+  const pluginPath = join(cwd, OC_PLUGIN_REL);
+  let pluginCreated = false;
+  if (force || !(await fileExists(pluginPath))) {
+    await mkdir(dirname(pluginPath), { recursive: true });
+    await writeFile(pluginPath, opencodeWakePluginBody({ agent, relay }), "utf8");
+    pluginCreated = true;
+  }
+
+  process.stdout.write(
+    `registered switchboard MCP for opencode (agent: ${agent}, relay: ${relay})\n`
+  );
+  process.stdout.write(`  wrote ${cfgPath} (mcp.switchboard + instructions)\n`);
+  process.stdout.write(
+    created ? `  wrote instructions ${instrPath}\n` : `  instructions already present (${instrPath})\n`
+  );
+  process.stdout.write(
+    pluginCreated ? `  wrote wake plugin ${pluginPath}\n` : `  wake plugin already present (${pluginPath})\n`
+  );
+  return { cfgPath, instrPath, created, pluginPath, pluginCreated };
+}
+
 /** Remove a legacy switchboard entry from a project's .mcp.json (written by
  *  switchboard <= 1.x), preserving any other MCP servers. Migration helper. */
 async function cleanLegacyMcpJson(cwd) {
@@ -398,6 +590,12 @@ export async function uninstallMcp({ cwd = process.cwd(), keepSkill = false } = 
       await rm(dir, { recursive: true, force: true });
       process.stdout.write(`removed skill ${join(dir, "SKILL.md")}\n`);
     }
+  }
+  // OpenCode wake plugin (best-effort; leave other plugins/files intact).
+  const pluginPath = join(cwd, OC_PLUGIN_REL);
+  if (await fileExists(pluginPath)) {
+    await rm(pluginPath, { force: true });
+    process.stdout.write(`removed opencode wake plugin ${pluginPath}\n`);
   }
 }
 

@@ -16,7 +16,7 @@ const DEFAULT_RELAY = "http://127.0.0.1:8765";
 export async function runSend({
   agent,
   relayUrl = DEFAULT_RELAY,
-  channel = null,
+  conversation = null,
   dm = null,
   to = [],
   content,
@@ -25,8 +25,8 @@ export async function runSend({
   schema = null,
 } = {}) {
   if (!agent) throw new Error("--agent NAME is required");
-  if (dm && channel) throw new Error("--channel and --dm are mutually exclusive");
-  if (!dm && !channel) throw new Error("provide --channel NAME or --dm AGENT");
+  if (dm && conversation) throw new Error("--conversation and --dm are mutually exclusive");
+  if (!dm && !conversation) throw new Error("provide --conversation ID or --dm AGENT");
 
   // Content: positional arg, or piped on stdin (handy for long, multi-line bodies).
   if (content == null) {
@@ -55,7 +55,7 @@ export async function runSend({
   const attempt = () =>
     dm
       ? client.dm({ to: dm, content })
-      : client.postMessage({ channel, content, to, data, schema, contract });
+      : client.postMessage({ conversation, content, to, data, schema, contract });
 
   let msg;
   try {
@@ -72,7 +72,7 @@ export async function runSend({
 
   const tag = to.length ? ` (to: ${to.join(", ")})` : "";
   process.stdout.write(
-    `[switchboard] sent id=${msg.id} status=${msg.status} → ${msg.channel}${tag}\n`
+    `[switchboard] sent id=${msg.id} status=${msg.status} → conv ${msg.conversationId.slice(0, 8)}${tag}\n`
   );
   if (msg.status === "pending") {
     process.stderr.write(

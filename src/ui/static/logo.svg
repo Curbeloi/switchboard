@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none" role="img" aria-label="Switchboard">
+  <defs>
+    <linearGradient id="sb-grad" x1="5" y1="35" x2="35" y2="5" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2DD4F5"/>
+      <stop offset="0.55" stop-color="#4B7BF5"/>
+      <stop offset="1" stop-color="#9A5CF0"/>
+    </linearGradient>
+  </defs>
+  <!-- patch cables / edges from the central switch to each endpoint -->
+  <g stroke="url(#sb-grad)" stroke-width="2.6" stroke-linecap="round">
+    <line x1="20" y1="20" x2="9.5" y2="10"/>
+    <line x1="20" y1="20" x2="30.5" y2="10.5"/>
+    <line x1="20" y1="20" x2="9.5" y2="30"/>
+    <line x1="20" y1="20" x2="30.5" y2="29.5"/>
+  </g>
+  <!-- nodes: central hub + four endpoints -->
+  <g fill="url(#sb-grad)">
+    <circle cx="20" cy="20" r="4.6"/>
+    <circle cx="9" cy="9.5" r="3.1"/>
+    <circle cx="31" cy="10" r="3.1"/>
+    <circle cx="9" cy="30.5" r="3.1"/>
+    <circle cx="31" cy="30" r="3.1"/>
+  </g>
+</svg>
