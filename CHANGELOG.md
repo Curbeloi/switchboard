@@ -4,6 +4,62 @@ All notable changes to `@icurbe/switchboard` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/); this project
 uses [Semantic Versioning](https://semver.org/).
 
+## [4.0.0] - 2026-07-11
+
+The supervision-loop release: conversations become the only messaging unit
+(channels are gone), every environment gets a real web console, reviews become
+a graph of configurable subagents, and the loop closes — agents post
+`[task-done]`, their reviewers verify, and the human supervises by exception.
+
+### Breaking
+- **Channels removed.** The hierarchy is now **Project › Environment ›
+  conversation** — a conversation is the unit you join, post into, and wait on
+  (a DM is the canonical 1:1 conversation). MCP tools renamed/reshaped:
+  `agent_send(conversation, …)`, `agent_conversation_start/_list/_close/
+  _set_contract`, `agent_state_read/_write`; channel REST routes are gone.
+  Existing channel-based installs must recreate their flows as conversations
+  (the DB migrates to the new schema on boot).
+
+### Added
+- **Projects & environments with live web consoles.** Create projects, attach
+  environments (a directory + engine + agent identity), and launch/supervise
+  each agent CLI in a PTY-backed terminal (xterm.js + node-pty) docked in the
+  UI — with folder browser, theme-aware terminal, and auto-registered
+  identities.
+- **Engine per environment: Claude Code or OpenCode.** Global default chosen in
+  setup/Settings, overridable per environment (engine badge in the list +
+  console header). OpenCode environments get `opencode.json` (MCP wiring) and a
+  generated **auto-wake plugin** (`.opencode/plugins/switchboard-wake.js`) so
+  OpenCode agents react to messages on their own, symmetric to Claude's
+  `switchboard listen`.
+- **Review subagents (LangGraph).** Per-environment reviewer nodes (role/skill
+  + provider + model) forming a dependency DAG: independent nodes run
+  concurrently, downstream nodes see upstream verdicts, and any node error
+  becomes `escalate` (fail-safe). Configured on a full-page **Agent graph**
+  canvas (Cytoscape) with per-provider model pickers (inherits master's model,
+  prompts for missing API keys, lists CLI models).
+- **The conversation review loop.** "Run subagents" in the master bar posts
+  per-environment verdicts INTO the conversation (badges per subagent); when an
+  agent posts **`[task-done]`** (or `data.task_status: "done"`) its OWN
+  environment's reviewers run automatically and reply in the conversation —
+  approve → continue, reject → the agent fixes on its own, escalate → the
+  human. When an agent tags **@master**, the relay drafts a reply that ALWAYS
+  waits for human approval. Both automations have Settings toggles and
+  anti-loop guards, and react only to delivered (supervised) messages.
+- **Multi-provider LLM supervision.** The reviewer/master can run on Anthropic,
+  OpenAI, Gemini, Ollama, the `claude` CLI, or OpenCode — keys and model picked
+  in Settings/wizard, per-provider model listing, key connect flow.
+- **Styled modal dialogs.** All native `alert`/`confirm`/`prompt` replaced with
+  project-styled modals (danger styling for deletions; Enter/Esc; stacks above
+  Settings). Cancelling the close-conversation dialog now aborts the close.
+- **Brand.** New node-graph logo (favicon + header) and markdown rendering for
+  master drafts/analysis.
+
+### Changed
+- The generated skill teaches the conversation model, the `[task-done]`
+  convention, and the `switchboard send` fallback; installs are engine-aware.
+- `sdd` specs for every feature of this release live under `specs/features/`.
+
 ## [3.4.0] - 2026-06-26
 
 Builds on 3.3.0: a more capable `master` (addressable, code review), a

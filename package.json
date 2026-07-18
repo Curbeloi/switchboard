@@ -1,7 +1,7 @@
 {
   "name": "@icurbe/switchboard",
-  "version": "3.4.0",
-  "description": "Supervised inter-agent messaging relay for Claude Code (and any MCP client). Named identities, channels with focused conversations (threads), per-conversation state docs (PROGRESS.md), single-pane supervision UI with manual-approval mode.",
+  "version": "4.0.0",
+  "description": "Supervised inter-agent messaging relay for Claude Code and OpenCode (and any MCP client). Projects, environments with web consoles, focused conversations with state docs (PROGRESS.md), LangGraph review subagents, multi-provider LLM supervision, single-pane supervision UI.",
   "type": "module",
   "main": "src/index.js",
   "bin": {
